@@ -1,0 +1,77 @@
+// brewcheck debug configurations for Zed (Delve adapter).
+//
+// Zed compiles the program from source ("mode": "debug"), so breakpoints work
+// without a separate build step. To debug a specific command, either pick one of
+// the presets below or edit the args of the first ("custom") entry.
+//
+// Notes:
+//   * cwd is the repo root so the bundled ./rules dir is found.
+//   * GITHUB_TOKEN / GH_TOKEN / VT_API_KEY are inherited from the environment
+//     Zed was launched with; uncomment the "env" block to set them inline.
+//   * --no-cache is set in most presets so debugging never touches brew's cache.
+[
+  {
+    "label": "brewcheck: custom (edit args)",
+    "adapter": "Delve",
+    "request": "launch",
+    "mode": "debug",
+    "program": "$ZED_WORKTREE_ROOT",
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "args": ["--formula", "jq", "--no-cache", "--verbose"]
+    // "env": { "GITHUB_TOKEN": "ghp_xxx", "VT_API_KEY": "xxx" }
+  },
+  {
+    "label": "brewcheck: formula (jq)",
+    "adapter": "Delve",
+    "request": "launch",
+    "mode": "debug",
+    "program": "$ZED_WORKTREE_ROOT",
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "args": ["--formula", "jq", "--no-cache", "--verbose"]
+  },
+  {
+    "label": "brewcheck: cask (google-chrome)",
+    "adapter": "Delve",
+    "request": "launch",
+    "mode": "debug",
+    "program": "$ZED_WORKTREE_ROOT",
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "args": ["--cask", "google-chrome", "--no-cache", "--verbose"]
+  },
+  {
+    "label": "brewcheck: positional + JSON report",
+    "adapter": "Delve",
+    "request": "launch",
+    "mode": "debug",
+    "program": "$ZED_WORKTREE_ROOT",
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "args": ["jq", "--json", "--no-cache"]
+  },
+  {
+    "label": "brewcheck: allow new repos",
+    "adapter": "Delve",
+    "request": "launch",
+    "mode": "debug",
+    "program": "$ZED_WORKTREE_ROOT",
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "args": ["--formula", "jq", "--allow-new-repos", "--no-cache", "--verbose"]
+  },
+  {
+    "label": "brewcheck: keep quarantine (inspect extracted files)",
+    "adapter": "Delve",
+    "request": "launch",
+    "mode": "debug",
+    "program": "$ZED_WORKTREE_ROOT",
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "args": ["--formula", "wget", "--keep", "--no-cache", "--verbose"]
+  },
+  {
+    "label": "brewcheck: cloud upload (opt-in, needs VT_API_KEY)",
+    "adapter": "Delve",
+    "request": "launch",
+    "mode": "debug",
+    "program": "$ZED_WORKTREE_ROOT",
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "args": ["--formula", "jq", "--cloud", "--no-cache", "--verbose"]
+  }
+]

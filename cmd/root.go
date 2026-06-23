@@ -25,6 +25,7 @@ type options struct {
 	jsonOut       bool
 	verbose       bool
 	quarantineDir string
+	allowNewRepos bool
 }
 
 var opts options
@@ -78,6 +79,7 @@ func init() {
 	f.BoolVar(&opts.jsonOut, "json", false, "emit a machine-readable JSON report")
 	f.BoolVarP(&opts.verbose, "verbose", "v", false, "log each pipeline step to stderr")
 	f.StringVar(&opts.quarantineDir, "quarantine-dir", "", "override the default quarantine location")
+	f.BoolVar(&opts.allowNewRepos, "allow-new-repos", false, "do not flag GitHub repositories younger than 30 days as SUSPICIOUS (credibility caps at HESITANT instead)")
 
 	rootCmd.MarkFlagsMutuallyExclusive("formula", "cask")
 }

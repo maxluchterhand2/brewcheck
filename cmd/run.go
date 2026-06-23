@@ -93,6 +93,7 @@ func run(ctx context.Context, positional string) int {
 		ArtifactSize:   dl.Size,
 		GitHubRepo:     res.githubRepo,
 		GitHubToken:    githubToken(),
+		AllowNewRepos:  opts.allowNewRepos,
 		Logf:           logf,
 	}
 	layers := scan.Run(ctx, in)

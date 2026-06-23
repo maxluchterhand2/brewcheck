@@ -163,7 +163,7 @@ func TestAnalyzeIntegration(t *testing.T) {
 	apiBase = srv.URL
 	defer func() { apiBase = oldBase }()
 
-	res := Analyze(context.Background(), "acme/widget", "", now)
+	res := Analyze(context.Background(), Options{Repo: "acme/widget", Now: now})
 	if res.Status != report.StatusRan {
 		t.Fatalf("status = %v (err=%s)", res.Status, res.Err)
 	}
@@ -180,7 +180,10 @@ func TestAnalyzeIntegration(t *testing.T) {
 	}
 }
 
-func TestAnalyzeNewRepoIsSuspicious(t *testing.T) {
+// mockNewRepo stands up a mock GitHub API for a 9-day-old repo and points
+// apiBase at it for the duration of the test.
+func mockNewRepo(t *testing.T) {
+	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/repos/new/proj", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, `{"stargazers_count": 3, "created_at": %q, "owner": {"login":"new","type":"User"}}`,
@@ -193,28 +196,55 @@ func TestAnalyzeNewRepoIsSuspicious(t *testing.T) {
 		fmt.Fprintf(w, `{"created_at": %q}`, ago(20*day).Format(time.RFC3339))
 	})
 	srv := httptest.NewServer(mux)
-	defer srv.Close()
+	t.Cleanup(srv.Close)
 	oldBase := apiBase
 	apiBase = srv.URL
-	defer func() { apiBase = oldBase }()
+	t.Cleanup(func() { apiBase = oldBase })
+}
 
-	res := Analyze(context.Background(), "new/proj", "", now)
+func severities(res report.LayerResult) (suspicious, hesitant bool) {
+	for _, f := range res.Findings {
+		switch f.Severity {
+		case report.SeveritySuspicious:
+			suspicious = true
+		case report.SeverityHesitant:
+			hesitant = true
+		}
+	}
+	return
+}
+
+func TestAnalyzeNewRepoIsSuspicious(t *testing.T) {
+	mockNewRepo(t)
+	res := Analyze(context.Background(), Options{Repo: "new/proj", Now: now})
 	if res.Status != report.StatusRan {
 		t.Fatalf("status = %v (err=%s)", res.Status, res.Err)
 	}
-	gotSuspicious := false
-	for _, f := range res.Findings {
-		if f.Severity == report.SeveritySuspicious {
-			gotSuspicious = true
-		}
-	}
-	if !gotSuspicious {
+	suspicious, _ := severities(res)
+	if !suspicious {
 		t.Errorf("sub-month repo must produce a SUSPICIOUS finding; findings=%+v", res.Findings)
 	}
 }
 
+// TestAnalyzeNewRepoAllowed verifies the --allow-new-repos escape hatch: the
+// sub-month repo no longer triggers SUSPICIOUS, only a non-blocking HESITANT.
+func TestAnalyzeNewRepoAllowed(t *testing.T) {
+	mockNewRepo(t)
+	res := Analyze(context.Background(), Options{Repo: "new/proj", AllowNewRepos: true, Now: now})
+	if res.Status != report.StatusRan {
+		t.Fatalf("status = %v (err=%s)", res.Status, res.Err)
+	}
+	suspicious, hesitant := severities(res)
+	if suspicious {
+		t.Errorf("AllowNewRepos must suppress the SUSPICIOUS finding; findings=%+v", res.Findings)
+	}
+	if !hesitant {
+		t.Errorf("a new repo with the rule disabled should still warn at HESITANT; findings=%+v", res.Findings)
+	}
+}
+
 func TestAnalyzeNoRepoSkips(t *testing.T) {
-	res := Analyze(context.Background(), "", "", now)
+	res := Analyze(context.Background(), Options{Repo: "", Now: now})
 	if res.Status != report.StatusSkipped {
 		t.Errorf("empty repo should skip, got %v", res.Status)
 	}

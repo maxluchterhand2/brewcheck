@@ -138,7 +138,11 @@ left open.
   not-brand-new repo scores ≤ 3/10) — never `SUSPICIOUS`/`MALICIOUS` — *except*
   the one explicit exception: a repository younger than **one month** (30 days)
   raises a `SUSPICIOUS` finding regardless of its other signals, which (given the
-  aggregation rules) blocks caching and deletes the bytes.
+  aggregation rules) blocks caching and deletes the bytes. The `--allow-new-repos`
+  flag disables this hard rule — a sub-month repo then degrades to a non-blocking
+  `HESITANT` finding (still surfaced, never silently dropped) so the ceiling is
+  uniformly `HESITANT` again. `RepoTooNew` stays a pure output of `Score()`; the
+  flag only changes how `Analyze` maps it to a finding severity.
 - The 0–10 score is always surfaced via `report.Credibility` (rendered as a
   `[████░░░░░░] N/10` gauge and included in `--json`), even for healthy repos
   that produce no finding, because the score itself is the requested output.

@@ -38,8 +38,9 @@ type Input struct {
 	MaxUploadSize int64
 	ArtifactSize  int64
 
-	GitHubRepo  string // "owner/repo" derived from the definition, or ""
-	GitHubToken string // optional, for higher API rate limits
+	GitHubRepo    string // "owner/repo" derived from the definition, or ""
+	GitHubToken   string // optional, for higher API rate limits
+	AllowNewRepos bool   // when true, a sub-month-old repo is not flagged SUSPICIOUS
 
 	Logf func(format string, a ...any)
 }
@@ -103,7 +104,12 @@ func runLocalParallel(ctx context.Context, in Input) []report.LayerResult {
 			return capa.Analyze(ctx, in.BinaryForCapa)
 		}},
 		{5, func() report.LayerResult {
-			return github.Analyze(ctx, in.GitHubRepo, in.GitHubToken, time.Now())
+			return github.Analyze(ctx, github.Options{
+				Repo:          in.GitHubRepo,
+				Token:         in.GitHubToken,
+				AllowNewRepos: in.AllowNewRepos,
+				Now:           time.Now(),
+			})
 		}},
 	}
 

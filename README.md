@@ -60,6 +60,7 @@ brewcheck <name>                # auto-resolve type (errors if ambiguous)
 | `--json` | `false` | emit a machine-readable JSON report |
 | `--verbose` / `-v` | `false` | log each pipeline step to stderr |
 | `--quarantine-dir <path>` | OS temp | override the quarantine location |
+| `--allow-new-repos` | `false` | don't flag GitHub repos younger than 30 days as `SUSPICIOUS` (credibility caps at `HESITANT` instead) |
 
 ### Environment variables
 
@@ -114,9 +115,10 @@ aggregated into one verdict; a definitive known-bad hit short-circuits.
    rates the upstream author/repository 0–10 from public signals (stars,
    contributors, repo age, account age, license). Lenient by design (new authors
    are normal in OSS), so it never pushes the verdict past `HESITANT` — **with
-   one exception**: a repository less than a month old yields `SUSPICIOUS`. Uses
-   the public GitHub API; set `GITHUB_TOKEN` (or `GH_TOKEN`) for higher rate
-   limits. The 0–10 score is always shown, even when good.
+   one exception**: a repository less than a month old yields `SUSPICIOUS`
+   (override with `--allow-new-repos`). Uses the public GitHub API; set
+   `GITHUB_TOKEN` (or `GH_TOKEN`) for higher rate limits. The 0–10 score is
+   always shown, even when good.
 8. **VirusTotal upload** — opt-in (`--cloud`), size-capped, never silent.
 
 Every external scanner is optional. If it isn't on `PATH`, that layer is
@@ -151,8 +153,11 @@ so a low score never pushes the verdict past `HESITANT` (a not-brand-new repo
 scoring ≤ 3/10 raises a non-blocking warning). Unknown signals are not punished.
 **The one exception:** a repository **less than a month old (30 days)** raises a
 `SUSPICIOUS` finding regardless of its other signals — which blocks caching and
-deletes the bytes. Network errors, rate limits, and missing repos never affect
-the verdict.
+deletes the bytes. Pass **`--allow-new-repos`** to disable this hard rule: a
+sub-month repo then caps at a non-blocking `HESITANT` warning (it's still shown,
+just not treated as suspicious) — useful when you knowingly install young or
+freshly-published projects. Network errors, rate limits, and missing repos never
+affect the verdict.
 
 ### Extraction safety
 

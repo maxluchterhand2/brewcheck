@@ -52,11 +52,20 @@ type Metrics struct {
 	Fork         bool
 }
 
+// Options configures an Analyze run.
+type Options struct {
+	Repo          string    // "owner/repo", or "" to skip
+	Token         string    // optional GitHub API token for higher rate limits
+	AllowNewRepos bool      // when true, a sub-month-old repo is NOT flagged SUSPICIOUS
+	Now           time.Time // injected clock (for testability)
+}
+
 // Analyze fetches metrics for "owner/repo" and returns a credibility layer.
 // A missing repo link, a rate-limit, or a network error never affects the
 // verdict — only a valid result can, and then only up to HESITANT (or
-// SUSPICIOUS for a sub-month-old repo).
-func Analyze(ctx context.Context, repo, token string, now time.Time) report.LayerResult {
+// SUSPICIOUS for a sub-month-old repo, unless opt.AllowNewRepos disables that).
+func Analyze(ctx context.Context, opt Options) report.LayerResult {
+	repo, token, now := opt.Repo, opt.Token, opt.Now
 	res := report.LayerResult{Name: "GitHub author credibility"}
 	if repo == "" {
 		res.Status = report.StatusSkipped
@@ -97,10 +106,18 @@ func Analyze(ctx context.Context, repo, token string, now time.Time) report.Laye
 	}
 	loc := "github.com/" + repo
 	switch {
-	case sc.RepoTooNew:
+	case sc.RepoTooNew && !opt.AllowNewRepos:
 		res.AddFinding(report.SeveritySuspicious,
 			"upstream GitHub repository is less than a month old",
 			fmt.Sprintf("created %s — a brand-new upstream repo warrants extra scrutiny before trusting it",
+				m.RepoCreated.Format("2006-01-02")),
+			loc)
+	case sc.RepoTooNew:
+		// AllowNewRepos: the sub-month repo is not blocking, but still worth a
+		// non-blocking heads-up rather than staying silent.
+		res.AddFinding(report.SeverityHesitant,
+			"upstream GitHub repository is less than a month old (30-day rule disabled)",
+			fmt.Sprintf("created %s — flagged HESITANT instead of SUSPICIOUS because --allow-new-repos is set",
 				m.RepoCreated.Format("2006-01-02")),
 			loc)
 	case sc.Score <= lowScoreThreshold:
