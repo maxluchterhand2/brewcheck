@@ -65,7 +65,9 @@ func TestUploadFileReportsProgress(t *testing.T) {
 }
 
 func TestUploadFileSkipsWithoutKey(t *testing.T) {
-	id, res, ok := New("").UploadFile(context.Background(), "/nonexistent", nil)
+	client := New("")
+	client.APIKey = ""
+	id, res, ok := client.UploadFile(context.Background(), "/nonexistent", nil)
 	if ok || id != "" {
 		t.Errorf("unconfigured client should not upload; got ok=%v id=%q", ok, id)
 	}
