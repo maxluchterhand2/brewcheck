@@ -1,0 +1,234 @@
+# brewcheck starter Semgrep rules for shell install scripts.
+# These run against extracted pkg scripts (pre/postinstall) and any shell
+# scripts found in artifacts.
+#
+# Severity maps onto brewcheck verdicts (see internal/scan/semgrep):
+#   ERROR / WARNING -> SUSPICIOUS  (do not cache by default; review)
+#   INFO            -> HESITANT    (cache, but warn — pedantic / FP-prone)
+#
+# pattern-regex uses RE2 syntax (no backreferences/lookaround).
+rules:
+  # --- remote-code execution ------------------------------------------------
+  - id: brewcheck-curl-pipe-shell
+    languages: [generic]
+    severity: ERROR
+    message: "Downloads a remote script and pipes it straight into a shell (curl|bash)."
+    patterns:
+      - pattern-regex: '(curl|wget)\b[^\n|]*\|\s*(ba|z)?sh'
+
+  - id: brewcheck-base64-pipe-shell
+    languages: [generic]
+    severity: ERROR
+    message: "Decodes base64 and executes the result in a shell (obfuscated payload)."
+    patterns:
+      - pattern-regex: 'base64\s+(-d|--decode|-D)\b[^\n|]*\|\s*(ba|z)?sh'
+
+  - id: brewcheck-eval-decoded
+    languages: [generic]
+    severity: ERROR
+    message: "eval of decoded/obfuscated content (base64|xxd|openssl|rev) — hidden command execution."
+    patterns:
+      - pattern-either:
+          - pattern-regex: '(?i)eval\s+[^\n]*\b(base64|xxd|openssl|uudecode)\b'
+          - pattern-regex: '(?i)eval\s+"?\$\([^\n]*\b(base64|xxd|openssl)\b'
+
+  - id: brewcheck-reverse-shell
+    languages: [generic]
+    severity: ERROR
+    message: "Reverse-shell / backconnect indicator (/dev/tcp, nc -e, mkfifo|nc)."
+    patterns:
+      - pattern-either:
+          - pattern-regex: '/dev/tcp/'
+          - pattern-regex: '(?i)\b(nc|ncat)\b[^\n]*\s-e\s+/(bin|usr)'
+          - pattern-regex: '(?i)mkfifo[^\n]*\|[^\n]*\b(nc|ncat)\b'
+
+  - id: brewcheck-interpreter-reverse-shell
+    languages: [generic]
+    severity: ERROR
+    message: "Inline interpreter reverse shell (python/perl/ruby socket + subprocess/exec)."
+    patterns:
+      - pattern-either:
+          - pattern-regex: '(?i)python[0-9.]*\s+-c[^\n]*(socket|pty\.spawn)'
+          - pattern-regex: '(?i)perl\s+-e[^\n]*socket'
+          - pattern-regex: '(?i)ruby\s+-r?e?[^\n]*TCPSocket'
+
+  # --- privilege escalation / tampering ------------------------------------
+  - id: brewcheck-sudoers-nopasswd
+    languages: [generic]
+    severity: ERROR
+    message: "Writes a passwordless-sudo entry (/etc/sudoers + NOPASSWD)."
+    patterns:
+      - pattern-either:
+          - pattern-regex: '(?i)(/private)?/etc/sudoers[^\n]*NOPASSWD'
+          - pattern-regex: '(?i)NOPASSWD[^\n]*(/private)?/etc/sudoers'
+
+  - id: brewcheck-create-hidden-user
+    languages: [generic]
+    severity: ERROR
+    message: "Creates a local user account via dscl (potential backdoor account)."
+    patterns:
+      - pattern-regex: '(?i)dscl\s+\.\s+-create\s+/Users/'
+
+  - id: brewcheck-disable-gatekeeper
+    languages: [generic]
+    severity: WARNING
+    message: "Disables Gatekeeper / SIP / quarantine enforcement (spctl, csrutil, LSQuarantine)."
+    patterns:
+      - pattern-either:
+          - pattern-regex: '(?i)spctl\s+--master-disable'
+          - pattern-regex: '(?i)spctl\s+--add\b'
+          - pattern-regex: '(?i)csrutil\s+disable'
+          - pattern-regex: '(?i)defaults\s+write[^\n]*LSQuarantine\s+-bool\s+(false|no)'
+
+  - id: brewcheck-osascript-admin
+    languages: [generic]
+    severity: WARNING
+    message: "AppleScript requests administrator privileges (privilege-escalation prompt)."
+    patterns:
+      - pattern-regex: '(?i)(osascript|do shell script)[^\n]*with administrator privileges'
+
+  - id: brewcheck-applescript-password-phish
+    languages: [generic]
+    severity: WARNING
+    message: "AppleScript password dialog with hidden input (credential-phishing pattern)."
+    patterns:
+      - pattern-regex: '(?i)display dialog[^\n]*hidden answer'
+
+  # --- persistence ----------------------------------------------------------
+  - id: brewcheck-launch-agent-persistence
+    languages: [generic]
+    severity: WARNING
+    message: "References a LaunchAgent/LaunchDaemon — a common macOS persistence mechanism."
+    patterns:
+      - pattern-regex: '(LaunchAgents|LaunchDaemons)/'
+
+  - id: brewcheck-launchctl-load
+    languages: [generic]
+    severity: WARNING
+    message: "Loads/bootstraps a launchd job (activates persistence)."
+    patterns:
+      - pattern-regex: '(?i)launchctl\s+(load|bootstrap|enable|submit)\b'
+
+  - id: brewcheck-crontab-persistence
+    languages: [generic]
+    severity: WARNING
+    message: "Installs a cron job (persistence / scheduled execution)."
+    patterns:
+      - pattern-either:
+          - pattern-regex: '(?i)crontab\s+-'
+          - pattern-regex: '(?i)>\s*/(etc/cron|var/at)'
+
+  - id: brewcheck-shell-rc-persistence
+    languages: [generic]
+    severity: WARNING
+    message: "Appends to a shell startup file (.zshrc/.bash_profile/.profile) — persistence."
+    patterns:
+      - pattern-regex: '(?i)>>\s*[~$"'']*[^\n]*(\.zshrc|\.zprofile|\.bash_profile|\.bashrc|\.profile)'
+
+  - id: brewcheck-login-item
+    languages: [generic]
+    severity: WARNING
+    message: "Adds a login item via System Events (auto-start persistence)."
+    patterns:
+      - pattern-regex: '(?i)(make|add)[^\n]*login item'
+
+  # --- exfiltration / credential theft -------------------------------------
+  - id: brewcheck-env-exfiltration
+    languages: [generic]
+    severity: WARNING
+    message: "Harvests environment/system info and pipes it to the network."
+    patterns:
+      - pattern-regex: '(?i)(printenv|\benv\b|whoami|hostname|system_profiler)[^\n|]*\|[^\n]*(curl|wget|nc|ncat)\b'
+
+  - id: brewcheck-keychain-access
+    languages: [generic]
+    severity: WARNING
+    message: "Reads/dumps the macOS keychain (security dump-keychain / find-*-password)."
+    patterns:
+      - pattern-either:
+          - pattern-regex: '(?i)security\s+(dump-keychain|find-(generic|internet)-password)'
+          - pattern-regex: '(?i)/Library/Keychains/'
+
+  - id: brewcheck-browser-credential-paths
+    languages: [generic]
+    severity: INFO
+    message: "References browser credential stores (Login Data / Cookies / logins.json) — info-stealer pattern."
+    patterns:
+      - pattern-either:
+          - pattern-regex: '(?i)(Google/Chrome|BraveSoftware|Microsoft Edge)[^\n]*(Login Data|Cookies)'
+          - pattern-regex: '(?i)Firefox/Profiles[^\n]*(logins\.json|cookies\.sqlite)'
+
+  - id: brewcheck-crypto-wallet-paths
+    languages: [generic]
+    severity: INFO
+    message: "References crypto-wallet data (wallet.dat / Exodus / Electrum) — stealer pattern."
+    patterns:
+      - pattern-either:
+          - pattern-regex: '(?i)\bwallet\.dat\b'
+          - pattern-regex: '(?i)Application Support/(Exodus|Electrum|Coinomi|atomic)'
+
+  - id: brewcheck-tcc-database
+    languages: [generic]
+    severity: INFO
+    message: "Touches the TCC privacy database (consent bypass / spoofing)."
+    patterns:
+      - pattern-regex: '(?i)(TCC\.db|com\.apple\.TCC)'
+
+  # --- network hygiene / obfuscation (pedantic, HESITANT) ------------------
+  - id: brewcheck-download-to-raw-ip
+    languages: [generic]
+    severity: WARNING
+    message: "Downloads from a raw IPv4 address instead of a hostname."
+    patterns:
+      - pattern-regex: '(?i)(curl|wget)\b[^\n]*https?://([0-9]{1,3}\.){3}[0-9]{1,3}'
+
+  - id: brewcheck-tls-verification-disabled
+    languages: [generic]
+    severity: WARNING
+    message: "Disables TLS certificate verification (curl -k / wget --no-check-certificate)."
+    patterns:
+      - pattern-either:
+          - pattern-regex: '(?i)curl\b[^\n]*\s(-k|--insecure)\b'
+          - pattern-regex: '(?i)wget\b[^\n]*--no-check-certificate'
+
+  - id: brewcheck-chmod-exec-temp
+    languages: [generic]
+    severity: WARNING
+    message: "Marks a file in a temp dir executable (download-and-run stager pattern)."
+    patterns:
+      - pattern-regex: '(?i)chmod\s+\+?x\s+["'']?(\$TMPDIR|/tmp/|/var/tmp/)'
+
+  - id: brewcheck-strip-quarantine
+    languages: [generic]
+    severity: INFO
+    message: "Strips the com.apple.quarantine attribute (common in legit casks, but worth a glance)."
+    patterns:
+      - pattern-either:
+          - pattern-regex: '(?i)xattr\s+([a-z-]*\s+)*-d\s+com\.apple\.quarantine'
+          - pattern-regex: '(?i)xattr\s+-c?r?\b[^\n]*com\.apple\.quarantine'
+
+  - id: brewcheck-anti-forensics
+    languages: [generic]
+    severity: INFO
+    message: "Clears shell history / self-deletes (anti-forensics)."
+    patterns:
+      - pattern-either:
+          - pattern-regex: '(?i)history\s+-c\b'
+          - pattern-regex: '(?i)(unset\s+HISTFILE|HISTFILE=/dev/null)'
+          - pattern-regex: '(?i)rm\s+-[rf]+\s+["'']?\$0'
+
+  - id: brewcheck-string-reversal-obfuscation
+    languages: [generic]
+    severity: INFO
+    message: "Reverses a string before executing it (rev | sh obfuscation)."
+    patterns:
+      - pattern-either:
+          - pattern-regex: '(?i)\brev\b[^\n|]*\|\s*(ba|z)?sh'
+          - pattern-regex: '(?i)\|\s*rev\b'
+
+  - id: brewcheck-hex-escape-obfuscation
+    languages: [generic]
+    severity: INFO
+    message: "Long \\x hex-escaped byte run (possible obfuscated string / shellcode)."
+    patterns:
+      - pattern-regex: '(\\x[0-9a-fA-F]{2}){10,}'

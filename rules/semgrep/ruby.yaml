@@ -1,0 +1,146 @@
+# brewcheck starter Semgrep rules for Ruby (formula/cask definitions and any
+# extracted .rb scripts). The JSON API does not expose formula Ruby source, so
+# these mainly apply to extracted Ruby and to future source-definition support.
+#
+# Rules are deliberately TARGETED rather than flagging every `system`/backtick:
+# legitimate formulae shell out constantly during builds, so broad rules would
+# drown the signal. We flag shell-outs only when the *command* is suspicious.
+#
+# Severity maps onto brewcheck verdicts (see internal/scan/semgrep):
+#   ERROR / WARNING -> SUSPICIOUS ; INFO -> HESITANT
+rules:
+  # --- remote-code execution ------------------------------------------------
+  - id: brewcheck-ruby-system-curl-pipe
+    languages: [ruby]
+    severity: ERROR
+    message: "Ruby shells out to curl|bash during install."
+    patterns:
+      - pattern-regex: '(system|`|%x)\s*[("'']?[^\n]*(curl|wget)[^\n]*\|\s*(ba|z)?sh'
+
+  - id: brewcheck-ruby-base64-exec
+    languages: [ruby]
+    severity: ERROR
+    message: "Ruby decodes base64 and feeds it to eval/system/exec (obfuscated execution)."
+    patterns:
+      - pattern-either:
+          - pattern-regex: '(?i)(eval|system|exec|`|%x|instance_eval)[^\n]*Base64\.(urlsafe_)?decode64'
+          - pattern-regex: '(?i)(eval|system|exec)[^\n]*\.unpack1?\(\s*["''](m|H)'
+
+  - id: brewcheck-ruby-eval
+    languages: [ruby]
+    severity: WARNING
+    message: "Ruby eval / instance_eval / class_eval on dynamic content."
+    patterns:
+      - pattern-either:
+          - pattern: eval(...)
+          - pattern: instance_eval(...)
+          - pattern: class_eval(...)
+          - pattern: module_eval(...)
+
+  - id: brewcheck-ruby-remote-exec
+    languages: [ruby]
+    severity: WARNING
+    message: "Ruby fetches a URL and executes/loads it."
+    patterns:
+      - pattern-regex: '(open|URI\.open|URI\.parse|Net::HTTP)[^\n]*https?://'
+
+  - id: brewcheck-ruby-require-remote
+    languages: [ruby]
+    severity: WARNING
+    message: "Ruby require/load of a remote or dynamically-built path."
+    patterns:
+      - pattern-regex: '(?i)(require|require_relative|load)\s+[^\n]*https?://'
+
+  - id: brewcheck-ruby-marshal-load
+    languages: [ruby]
+    severity: WARNING
+    message: "Ruby Marshal.load / YAML.load on external data (unsafe deserialization)."
+    patterns:
+      - pattern-either:
+          - pattern: Marshal.load(...)
+          - pattern: YAML.load(...)
+
+  # --- privilege escalation / tampering ------------------------------------
+  - id: brewcheck-ruby-sudo
+    languages: [ruby]
+    severity: WARNING
+    message: "Ruby install step invokes sudo (unusual for a formula/cask)."
+    patterns:
+      - pattern-regex: '(?i)(system|exec|`|%x)\s*[("'']?[^\n]*\bsudo\b'
+
+  - id: brewcheck-ruby-disable-gatekeeper
+    languages: [ruby]
+    severity: WARNING
+    message: "Ruby shells out to disable Gatekeeper / quarantine (spctl, csrutil, xattr quarantine)."
+    patterns:
+      - pattern-either:
+          - pattern-regex: '(?i)spctl[^\n]*--master-disable'
+          - pattern-regex: '(?i)csrutil\s+disable'
+          - pattern-regex: '(?i)xattr[^\n]*-d[^\n]*com\.apple\.quarantine'
+
+  - id: brewcheck-ruby-osascript-admin
+    languages: [ruby]
+    severity: WARNING
+    message: "Ruby runs AppleScript requesting administrator privileges."
+    patterns:
+      - pattern-regex: '(?i)osascript[^\n]*with administrator privileges'
+
+  # --- persistence ----------------------------------------------------------
+  - id: brewcheck-ruby-launch-agent
+    languages: [ruby]
+    severity: WARNING
+    message: "Ruby writes a LaunchAgent/LaunchDaemon path (persistence)."
+    patterns:
+      - pattern-regex: '(LaunchAgents|LaunchDaemons)/'
+
+  - id: brewcheck-ruby-crontab
+    languages: [ruby]
+    severity: WARNING
+    message: "Ruby installs a cron job (persistence)."
+    patterns:
+      - pattern-regex: '(?i)(system|exec|`|%x)[^\n]*crontab\s+-'
+
+  # --- exfiltration / obfuscation ------------------------------------------
+  - id: brewcheck-ruby-env-exfiltration
+    languages: [ruby]
+    severity: WARNING
+    message: "Ruby sends environment variables over the network."
+    patterns:
+      - pattern-regex: '(?i)(Net::HTTP|URI\.open|open|post|get)\s*\([^\n]*ENV\['
+
+  - id: brewcheck-ruby-dynamic-dispatch
+    languages: [ruby]
+    severity: INFO
+    message: "Dynamic method dispatch (send/__send__) on a computed name — possible obfuscation."
+    patterns:
+      - pattern-either:
+          - pattern-regex: '\.(send|__send__|public_send)\s*\(\s*(Base64|"\\x|\[|.*\.reverse)'
+          - pattern-regex: '(?i)method_missing'
+
+  - id: brewcheck-ruby-reverse-obfuscation
+    languages: [ruby]
+    severity: INFO
+    message: "Reverses a string before evaluating/executing it (obfuscation)."
+    patterns:
+      - pattern-regex: '(?i)(eval|system|exec)[^\n]*\.reverse\b'
+
+  - id: brewcheck-ruby-hex-string
+    languages: [ruby]
+    severity: INFO
+    message: "Long \\x hex-escaped string literal (possible obfuscated payload)."
+    patterns:
+      - pattern-regex: '(\\x[0-9a-fA-F]{2}){8,}'
+
+  - id: brewcheck-ruby-chmod-world-exec
+    languages: [ruby]
+    severity: INFO
+    message: "Ruby chmods a file world-writable/executable (0777)."
+    patterns:
+      - pattern-regex: '(?i)(File|FileUtils)\.chmod\s*\(?\s*0?777'
+
+  - id: brewcheck-ruby-download-raw-ip
+    languages: [ruby]
+    severity: WARNING
+    message: "Ruby downloads from a raw IPv4 address instead of a hostname."
+    patterns:
+      - pattern-regex: '(?i)(curl|wget|Net::HTTP|URI)[^\n]*https?://([0-9]{1,3}\.){3}[0-9]{1,3}'
