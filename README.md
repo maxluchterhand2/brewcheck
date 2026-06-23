@@ -3,8 +3,9 @@
 `brewcheck` fetches a Homebrew **formula bottle** or **cask** artifact *without
 using the `brew` binary to download it*, verifies its sha256 against Homebrew's
 published hash, scans the verified bytes for malware and suspicious patterns,
-and — **only on a clean verdict** — hands the bytes to Homebrew's cache so a
-later `brew install` skips the download.
+weighs the credibility of the upstream GitHub author, and — **only on a clean
+verdict** — hands the bytes to Homebrew's cache so a later `brew install` skips
+the download.
 
 > **What this tool is — and isn't.** brewcheck detects **known malware and
 > suspicious patterns**. It is **not** a defense against a novel, targeted
@@ -59,6 +60,14 @@ brewcheck <name>                # auto-resolve type (errors if ambiguous)
 | `--json` | `false` | emit a machine-readable JSON report |
 | `--verbose` / `-v` | `false` | log each pipeline step to stderr |
 | `--quarantine-dir <path>` | OS temp | override the quarantine location |
+
+### Environment variables
+
+| Variable | Used by | Effect |
+|----------|---------|--------|
+| `VT_API_KEY` | VirusTotal layers | enables hash lookup (and `--cloud` upload); the layer is skipped if unset |
+| `GITHUB_TOKEN` / `GH_TOKEN` | GitHub author credibility | optional; raises the GitHub API rate limit from 60/hr to 5000/hr. The check still runs unauthenticated — it just skips with a hint when the limit is hit |
+| `BREWCHECK_RULES_DIR` | Semgrep / YARA | overrides where the bundled `rules/` dir is found |
 
 ### Exit codes
 
@@ -115,6 +124,36 @@ reported as `skipped (not installed)` with an install hint, and the report
 states **which layers ran vs. skipped** — a verdict from 1/8 layers is weaker
 than 8/8.
 
+### Author credibility scoring
+
+When the definition links a GitHub repo (parsed from `homepage`, falling back to
+the source URL), brewcheck rates the upstream author/repository on a **0–10**
+scale from cheap public-API signals. The weighting follows priority order,
+normalized to 10:
+
+| Signal | Max points | Buckets (log-ish) |
+|--------|-----------:|-------------------|
+| Stars | 4.0 | 1 / 10 / 50 / 200 / 1k / 5k |
+| Contributors | 2.0 | 1 / 2 / 5 / 10 / 50 |
+| Repo age | 2.0 | 1mo / 6mo / 1y / 3y |
+| Account/org age | 1.5 | 6mo / 1y / 3y |
+| License present | 0.5 | — |
+
+The score is **always displayed**, even when healthy, as a gauge:
+
+```
+credibility: [██████████] 10/10  (github.com/jqlang/jq)
+    35,018★ · 248 contributors · repo age 13.9y · org age 4.1y · no license
+```
+
+This check is **deliberately lenient** — new authors are normal in open source,
+so a low score never pushes the verdict past `HESITANT` (a not-brand-new repo
+scoring ≤ 3/10 raises a non-blocking warning). Unknown signals are not punished.
+**The one exception:** a repository **less than a month old (30 days)** raises a
+`SUSPICIOUS` finding regardless of its other signals — which blocks caching and
+deletes the bytes. Network errors, rate limits, and missing repos never affect
+the verdict.
+
 ### Extraction safety
 
 dmg/pkg are **extracted, never mounted or run** (`7z` for dmg, `pkgutil
@@ -137,7 +176,7 @@ internal/
   download/          streaming download + sha256, quarantine mgmt
   verify/            sha256 verification
   extract/           safe extraction (7z, pkgutil --expand), zip-slip guards
-  scan/              vt, semgrep, clamav, yara, capa + pipeline orchestration
+  scan/              static, vt, semgrep, clamav, yara, capa, github + pipeline orchestration
   brewcache/         `brew --cache` path oracle + atomic move
   report/            human + JSON report rendering
   deps/              external-tool detection + install hints
@@ -150,10 +189,13 @@ rules/               starter semgrep + yara rules
 go test ./...
 ```
 
-Covers API parsing & platform bottle selection, sha256 match/mismatch/no_check,
-the verify branch (proceed/abort/flag), report rendering & verdict aggregation,
-the zip-slip guard, OCI URL parsing & blob streaming, and static-analysis
-pattern detection. HTTP is mocked for the API/OCI clients.
+Covers API parsing & platform bottle selection, GitHub repo-URL derivation,
+sha256 match/mismatch/no_check, the verify branch (proceed/abort/flag), report
+rendering & verdict aggregation (including `HESITANT`), the zip-slip guard, OCI
+URL parsing & blob streaming, static-analysis pattern detection, and the author
+credibility scoring (weights, the sub-month `SUSPICIOUS` exception, and the
+contributor-count `Link`-header parse). HTTP is mocked for the API/OCI/GitHub
+clients.
 
 ## Known limitations / follow-ups (not in v0.1)
 
