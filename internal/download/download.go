@@ -73,8 +73,9 @@ type Result struct {
 }
 
 // Fetch streams f into the quarantine dir, enforcing maxSize (0 = no limit),
-// and returns the path plus computed sha256.
-func (q *Quarantine) Fetch(ctx context.Context, f Fetcher, maxSize int64) (*Result, error) {
+// and returns the path plus computed sha256. onProgress, if non-nil, is called
+// as bytes arrive with (bytesSoFar, totalSize); totalSize is -1 when unknown.
+func (q *Quarantine) Fetch(ctx context.Context, f Fetcher, maxSize int64, onProgress func(done, total int64)) (*Result, error) {
 	body, size, err := f.Open(ctx)
 	if err != nil {
 		return nil, err
@@ -98,6 +99,9 @@ func (q *Quarantine) Fetch(ctx context.Context, f Fetcher, maxSize int64) (*Resu
 		// +1 so we can detect overflow when Content-Length lied or was absent.
 		reader = io.LimitReader(reader, maxSize+1)
 	}
+	if onProgress != nil {
+		reader = &progressReader{r: reader, total: size, cb: onProgress}
+	}
 
 	n, err := io.Copy(out, reader)
 	if err != nil {
@@ -112,6 +116,24 @@ func (q *Quarantine) Fetch(ctx context.Context, f Fetcher, maxSize int64) (*Resu
 		return nil, fmt.Errorf("syncing artifact: %w", err)
 	}
 	return &Result{Path: dst, SHA256: hex.EncodeToString(h.Sum(nil)), Size: n}, nil
+}
+
+// progressReader reports cumulative bytes read to a callback. The callback is
+// expected to throttle its own rendering (see internal/progress).
+type progressReader struct {
+	r     io.Reader
+	total int64
+	done  int64
+	cb    func(done, total int64)
+}
+
+func (p *progressReader) Read(b []byte) (int, error) {
+	n, err := p.r.Read(b)
+	if n > 0 {
+		p.done += int64(n)
+		p.cb(p.done, p.total)
+	}
+	return n, err
 }
 
 func sanitizeName(name string) string {

@@ -10,6 +10,7 @@ import (
 	"brewcheck/internal/brewcache"
 	"brewcheck/internal/download"
 	"brewcheck/internal/extract"
+	"brewcheck/internal/progress"
 	"brewcheck/internal/report"
 	"brewcheck/internal/scan"
 	"brewcheck/internal/verify"
@@ -35,9 +36,15 @@ func run(ctx context.Context, positional string) int {
 		}
 	}
 
+	// Progress indicators render on stderr (stdout/--json stay clean) only when
+	// interactive; --verbose's step logs would otherwise fight the spinner.
+	showProgress := progress.StderrIsTTY() && !opts.verbose && !opts.noProgress
+
 	r := &report.Report{}
 
+	sp := progress.NewSpinner(showProgress, "resolving "+displayName(positional))
 	res, err := resolveTarget(ctx, positional)
+	sp.Stop()
 	if err != nil {
 		return emitError(r, err)
 	}
@@ -52,9 +59,15 @@ func run(ctx context.Context, positional string) int {
 	defer q.Cleanup()
 	logf("quarantine: %s", q.Dir)
 
-	// Download (streaming + sha256) into quarantine.
+	// Download (streaming + sha256) into quarantine, with a percentage bar.
 	logf("downloading %s", res.sourceURL)
-	dl, err := q.Fetch(ctx, res.fetcher, maxDownloadSize)
+	bar := progress.NewBar(showProgress, fmt.Sprintf("downloading %s %s", res.kind, res.name))
+	var onProgress func(done, total int64)
+	if bar != nil {
+		onProgress = bar.Update
+	}
+	dl, err := q.Fetch(ctx, res.fetcher, maxDownloadSize, onProgress)
+	bar.Finish()
 	if err != nil {
 		return emitError(r, fmt.Errorf("download failed: %w", err))
 	}
@@ -71,6 +84,11 @@ func run(ctx context.Context, positional string) int {
 		emit(r)
 		return r.Verdict.ExitCode()
 	}
+
+	// Extract + scan can take a while (local scanners + VT/GitHub network), with
+	// no measurable total — show an indeterminate spinner for the whole phase.
+	scanSpin := progress.NewSpinner(showProgress, "scanning "+res.name)
+	defer scanSpin.Stop() // safety net; also stopped explicitly below before output
 
 	// Extract for scanning (never mount/run). Best-effort.
 	scriptPaths, scanTargets := prepareScanInputs(ctx, q, dl.Path, res.kind, logf)
@@ -97,6 +115,7 @@ func run(ctx context.Context, positional string) int {
 		Logf:           logf,
 	}
 	layers := scan.Run(ctx, in)
+	scanSpin.Stop() // clear the indicator before any report output
 
 	// Verification layer leads the report.
 	r.Layers = append([]report.LayerResult{verifyLayer}, layers...)
@@ -107,6 +126,21 @@ func run(ctx context.Context, positional string) int {
 
 	emit(r)
 	return r.Verdict.ExitCode()
+}
+
+// displayName picks the best label for the pre-resolution spinner from whatever
+// the user supplied (positional name or --formula/--cask flag).
+func displayName(positional string) string {
+	switch {
+	case positional != "":
+		return positional
+	case opts.formula != "":
+		return opts.formula
+	case opts.cask != "":
+		return opts.cask
+	default:
+		return "target"
+	}
 }
 
 // verifyHash builds the verification layer and reports whether to abort.

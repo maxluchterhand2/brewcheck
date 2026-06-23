@@ -61,6 +61,15 @@ brewcheck <name>                # auto-resolve type (errors if ambiguous)
 | `--verbose` / `-v` | `false` | log each pipeline step to stderr |
 | `--quarantine-dir <path>` | OS temp | override the quarantine location |
 | `--allow-new-repos` | `false` | don't flag GitHub repos younger than 30 days as `SUSPICIOUS` (credibility caps at `HESITANT` instead) |
+| `--no-progress` | `false` | disable progress indicators (auto-disabled when stderr isn't a TTY or with `--verbose`) |
+
+### Progress indicators
+
+In an interactive terminal, brewcheck shows progress on **stderr** (so stdout
+and `--json` stay clean): a **percentage bar** for the measurable download and a
+**spinner** for indeterminate phases (resolution, scanning). They auto-disable
+when stderr isn't a TTY (piped/redirected) or when `--verbose` is set, and can
+be turned off explicitly with `--no-progress`.
 
 ### Environment variables
 
@@ -184,6 +193,7 @@ internal/
   scan/              static, vt, semgrep, clamav, yara, capa, github + pipeline orchestration
   brewcache/         `brew --cache` path oracle + atomic move
   report/            human + JSON report rendering
+  progress/          stderr progress bar + spinner (TTY-only, no deps)
   deps/              external-tool detection + install hints
 rules/               starter semgrep + yara rules
 ```

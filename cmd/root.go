@@ -26,6 +26,7 @@ type options struct {
 	verbose       bool
 	quarantineDir string
 	allowNewRepos bool
+	noProgress    bool
 }
 
 var opts options
@@ -80,6 +81,7 @@ func init() {
 	f.BoolVarP(&opts.verbose, "verbose", "v", false, "log each pipeline step to stderr")
 	f.StringVar(&opts.quarantineDir, "quarantine-dir", "", "override the default quarantine location")
 	f.BoolVar(&opts.allowNewRepos, "allow-new-repos", false, "do not flag GitHub repositories younger than 30 days as SUSPICIOUS (credibility caps at HESITANT instead)")
+	f.BoolVar(&opts.noProgress, "no-progress", false, "disable progress indicators (auto-disabled when stderr is not a TTY or with --verbose)")
 
 	rootCmd.MarkFlagsMutuallyExclusive("formula", "cask")
 }
