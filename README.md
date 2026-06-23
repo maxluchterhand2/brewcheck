@@ -55,7 +55,7 @@ brewcheck <name>                # auto-resolve type (errors if ambiguous)
 | `--formula <name>` / `--cask <name>` | — | explicit type (mutually exclusive) |
 | `--cache` / `--no-cache` | `true` | place verified bytes in brew's cache on a clean verdict |
 | `--keep` | `false` | keep the quarantine dir (debugging) |
-| `--cloud` | `false` | allow opt-in VirusTotal **file upload** as a last resort |
+| `--cloud` | `false` | allow opt-in VirusTotal **file upload** when file hashes are unknown to VirusTotal |
 | `--max-upload-size <bytes>` | `52428800` (50 MiB) | never cloud-upload above this, even with `--cloud` |
 | `--json` | `false` | emit a machine-readable JSON report |
 | `--verbose` / `-v` | `false` | log each pipeline step to stderr |
@@ -63,13 +63,6 @@ brewcheck <name>                # auto-resolve type (errors if ambiguous)
 | `--allow-new-repos` | `false` | don't flag GitHub repos younger than 30 days as `SUSPICIOUS` (credibility caps at `HESITANT` instead) |
 | `--no-progress` | `false` | disable progress indicators (auto-disabled when stderr isn't a TTY or with `--verbose`) |
 
-### Progress indicators
-
-In an interactive terminal, brewcheck shows progress on **stderr** (so stdout
-and `--json` stay clean): a **percentage bar** for the measurable download and a
-**spinner** for indeterminate phases (resolution, scanning). They auto-disable
-when stderr isn't a TTY (piped/redirected) or when `--verbose` is set, and can
-be turned off explicitly with `--no-progress`.
 
 ### Environment variables
 
