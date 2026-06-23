@@ -58,7 +58,7 @@ func Run(ctx context.Context, in Input) []report.LayerResult {
 	// Layer 1: VirusTotal hash reputation (zero upload, may short-circuit).
 	in.log("layer: VirusTotal hash reputation")
 	vtClient := vt.New(in.VTKey)
-	vtRes, definitelyBad := vtClient.LookupHash(ctx, in.SHA256)
+	vtRes, definitelyBad, vtKnown := vtClient.LookupHash(ctx, in.SHA256)
 	layers = append(layers, vtRes)
 
 	if definitelyBad {
@@ -79,7 +79,7 @@ func Run(ctx context.Context, in Input) []report.LayerResult {
 	layers = append(layers, local...)
 
 	// Layer 4: opt-in cloud upload, last resort.
-	layers = append(layers, maybeCloud(ctx, in, layers))
+	layers = append(layers, maybeCloud(ctx, in, vtKnown))
 	return layers
 }
 
@@ -126,10 +126,16 @@ func runLocalParallel(ctx context.Context, in Input) []report.LayerResult {
 	return results
 }
 
-func maybeCloud(ctx context.Context, in Input, prior []report.LayerResult) report.LayerResult {
+func maybeCloud(ctx context.Context, in Input, vtKnown bool) report.LayerResult {
 	name := "VirusTotal upload (opt-in)"
 	if !in.AllowCloud {
 		return skipped(name, "not enabled (pass --cloud to allow uploading the file)")
+	}
+	// No point uploading a file VirusTotal already has — it would reject the
+	// re-upload with 409 Conflict (AlreadyExistsError). The hash-reputation
+	// layer above already carries VT's verdict for this artifact.
+	if vtKnown {
+		return skipped(name, "VirusTotal already has this file (see the hash reputation layer); skipping the redundant upload")
 	}
 	if in.MaxUploadSize > 0 && in.ArtifactSize > in.MaxUploadSize {
 		return skipped(name, "file exceeds --max-upload-size; never uploaded")

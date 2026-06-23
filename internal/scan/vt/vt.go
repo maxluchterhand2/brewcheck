@@ -57,21 +57,24 @@ type fileResponse struct {
 	} `json:"data"`
 }
 
-// LookupHash queries VT by sha256 without uploading. Returns a layer result and
-// a boolean indicating a definitive malicious hit (for short-circuiting).
-func (c *Client) LookupHash(ctx context.Context, sha256 string) (report.LayerResult, bool) {
-	res := report.LayerResult{Name: "VirusTotal hash reputation"}
+// LookupHash queries VT by sha256 without uploading. It returns the layer
+// result, a boolean indicating a definitive malicious hit (for short-
+// circuiting), and a boolean reporting whether VirusTotal already has a record
+// of this file. The latter lets the caller skip a redundant cloud upload — VT
+// rejects re-uploads of known files with 409 Conflict (AlreadyExistsError).
+func (c *Client) LookupHash(ctx context.Context, sha256 string) (res report.LayerResult, definitelyBad, known bool) {
+	res = report.LayerResult{Name: "VirusTotal hash reputation"}
 	if !c.Configured() {
 		res.Status = report.StatusSkipped
 		res.Hint = "set VT_API_KEY (free key at https://www.virustotal.com)"
-		return res, false
+		return res, false, false
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiBase+"/files/"+sha256, nil)
 	if err != nil {
 		res.Status = report.StatusError
 		res.Err = err.Error()
-		return res, false
+		return res, false, false
 	}
 	req.Header.Set("x-apikey", c.APIKey)
 
@@ -79,7 +82,7 @@ func (c *Client) LookupHash(ctx context.Context, sha256 string) (report.LayerRes
 	if err != nil {
 		res.Status = report.StatusError
 		res.Err = err.Error()
-		return res, false
+		return res, false, false
 	}
 	defer resp.Body.Close()
 
@@ -87,26 +90,28 @@ func (c *Client) LookupHash(ctx context.Context, sha256 string) (report.LayerRes
 	case http.StatusNotFound:
 		res.Status = report.StatusRan
 		res.Summary = "hash unknown to VirusTotal (no prior analysis)"
-		return res, false
+		return res, false, false
 	case http.StatusTooManyRequests:
 		res.Status = report.StatusError
 		res.Err = "VirusTotal rate limit hit (free tier ~4 req/min)"
-		return res, false
+		return res, false, false
 	case http.StatusOK:
 		// fallthrough below
 	default:
 		res.Status = report.StatusError
 		res.Err = fmt.Sprintf("VirusTotal returned %s", resp.Status)
-		return res, false
+		return res, false, false
 	}
 
 	var fr fileResponse
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&fr); err != nil {
 		res.Status = report.StatusError
 		res.Err = err.Error()
-		return res, false
+		return res, false, false
 	}
-	return interpret(&res, fr.Data.Attributes.LastAnalysisStats)
+	// A 200 means VT already has this file on record.
+	out, bad := interpret(&res, fr.Data.Attributes.LastAnalysisStats)
+	return out, bad, true
 }
 
 func interpret(res *report.LayerResult, st fileStats) (report.LayerResult, bool) {
