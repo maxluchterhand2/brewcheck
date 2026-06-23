@@ -100,6 +100,32 @@ func (b *Bar) Finish() {
 	fmt.Fprint(b.w, "\n")
 }
 
+// NewReader wraps r so each Read reports cumulative bytes to cb with the fixed
+// total. Pass a Bar's Update as cb to drive a transfer/upload bar. When cb is
+// nil, r is returned unchanged.
+func NewReader(r io.Reader, total int64, cb func(done, total int64)) io.Reader {
+	if cb == nil {
+		return r
+	}
+	return &countingReader{r: r, total: total, cb: cb}
+}
+
+type countingReader struct {
+	r     io.Reader
+	total int64
+	done  int64
+	cb    func(done, total int64)
+}
+
+func (c *countingReader) Read(b []byte) (int, error) {
+	n, err := c.r.Read(b)
+	if n > 0 {
+		c.done += int64(n)
+		c.cb(c.done, c.total)
+	}
+	return n, err
+}
+
 var spinFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 // Spinner is an in-place braille spinner for indeterminate waits. A nil

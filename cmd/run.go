@@ -112,6 +112,8 @@ func run(ctx context.Context, positional string) int {
 		GitHubRepo:     res.githubRepo,
 		GitHubToken:    githubToken(),
 		AllowNewRepos:  opts.allowNewRepos,
+		ShowProgress:   showProgress,
+		OnUploadStart:  scanSpin.Stop, // clear the scan spinner before the upload bar
 		Logf:           logf,
 	}
 	layers := scan.Run(ctx, in)

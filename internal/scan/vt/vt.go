@@ -15,10 +15,12 @@ import (
 	"os"
 	"time"
 
+	"brewcheck/internal/progress"
 	"brewcheck/internal/report"
 )
 
-const apiBase = "https://www.virustotal.com/api/v3"
+// apiBase is a var (not const) so tests can point it at a mock server.
+var apiBase = "https://www.virustotal.com/api/v3"
 
 // maliciousThreshold is the engine-detection count at/above which we treat a
 // hash as definitively known-bad.
@@ -130,22 +132,25 @@ func interpret(res *report.LayerResult, st fileStats) (report.LayerResult, bool)
 	return *res, false
 }
 
-// Upload performs the opt-in last-resort file upload and polls the analysis.
-// The caller is responsible for the size cap and for telling the user before
-// calling this — Upload never decides policy on its own.
-func (c *Client) Upload(ctx context.Context, path string) (report.LayerResult, bool) {
-	res := report.LayerResult{Name: "VirusTotal upload (opt-in)"}
+// UploadFile performs the opt-in file upload and returns the analysis id to
+// poll. onProgress, if non-nil, is called as the request body is sent (done of
+// total bytes), so the caller can drive a percentage bar. The caller is
+// responsible for the size cap and for telling the user before calling this —
+// UploadFile never decides policy on its own. On any failure it returns ok=false
+// with a populated layer result describing the problem.
+func (c *Client) UploadFile(ctx context.Context, path string, onProgress func(done, total int64)) (id string, res report.LayerResult, ok bool) {
+	res = report.LayerResult{Name: "VirusTotal upload (opt-in)"}
 	if !c.Configured() {
 		res.Status = report.StatusSkipped
 		res.Hint = "set VT_API_KEY to enable cloud upload"
-		return res, false
+		return "", res, false
 	}
 
 	f, err := os.Open(path)
 	if err != nil {
 		res.Status = report.StatusError
 		res.Err = err.Error()
-		return res, false
+		return "", res, false
 	}
 	defer f.Close()
 
@@ -158,16 +163,23 @@ func (c *Client) Upload(ctx context.Context, path string) (report.LayerResult, b
 	if err != nil {
 		res.Status = report.StatusError
 		res.Err = err.Error()
-		return res, false
+		return "", res, false
 	}
 	mw.Close()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiBase+"/files", &buf)
+	// Wrap the (fully buffered) body so progress is reported as the transport
+	// drains it onto the wire. ContentLength must be set explicitly because the
+	// wrapped reader isn't a *bytes.Buffer net/http can measure on its own.
+	bodyLen := int64(buf.Len())
+	body := progress.NewReader(&buf, bodyLen, onProgress)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiBase+"/files", body)
 	if err != nil {
 		res.Status = report.StatusError
 		res.Err = err.Error()
-		return res, false
+		return "", res, false
 	}
+	req.ContentLength = bodyLen
 	req.Header.Set("x-apikey", c.APIKey)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 
@@ -175,13 +187,13 @@ func (c *Client) Upload(ctx context.Context, path string) (report.LayerResult, b
 	if err != nil {
 		res.Status = report.StatusError
 		res.Err = err.Error()
-		return res, false
+		return "", res, false
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		res.Status = report.StatusError
 		res.Err = fmt.Sprintf("upload returned %s", resp.Status)
-		return res, false
+		return "", res, false
 	}
 
 	var up struct {
@@ -192,9 +204,16 @@ func (c *Client) Upload(ctx context.Context, path string) (report.LayerResult, b
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&up); err != nil {
 		res.Status = report.StatusError
 		res.Err = err.Error()
-		return res, false
+		return "", res, false
 	}
-	return c.pollAnalysis(ctx, &res, up.Data.ID)
+	return up.Data.ID, res, true
+}
+
+// PollAnalysis waits for a submitted analysis (by id) to complete and interprets
+// the result. It is the indeterminate companion to UploadFile.
+func (c *Client) PollAnalysis(ctx context.Context, id string) (report.LayerResult, bool) {
+	res := report.LayerResult{Name: "VirusTotal upload (opt-in)"}
+	return c.pollAnalysis(ctx, &res, id)
 }
 
 func (c *Client) pollAnalysis(ctx context.Context, res *report.LayerResult, id string) (report.LayerResult, bool) {

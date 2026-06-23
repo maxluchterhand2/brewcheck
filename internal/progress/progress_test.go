@@ -2,6 +2,7 @@ package progress
 
 import (
 	"bytes"
+	"io"
 	"strings"
 	"testing"
 )
@@ -69,6 +70,39 @@ func TestBarRenderUnknownTotal(t *testing.T) {
 	}
 	if strings.Contains(out, "%") {
 		t.Errorf("unknown-total bar must not show a percentage; got:\n%q", out)
+	}
+}
+
+func TestNewReaderReportsProgress(t *testing.T) {
+	const total = 100
+	src := bytes.NewReader(make([]byte, total))
+
+	var lastDone, lastTotal int64
+	calls := 0
+	r := NewReader(src, total, func(done, tot int64) {
+		calls++
+		lastDone, lastTotal = done, tot
+	})
+
+	n, err := io.Copy(io.Discard, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != total {
+		t.Fatalf("copied %d bytes, want %d", n, total)
+	}
+	if calls == 0 {
+		t.Error("callback was never invoked")
+	}
+	if lastDone != total || lastTotal != total {
+		t.Errorf("final progress = (%d, %d), want (%d, %d)", lastDone, lastTotal, total, total)
+	}
+}
+
+func TestNewReaderNilCallbackIsPassThrough(t *testing.T) {
+	src := strings.NewReader("hello")
+	if got := NewReader(src, 5, nil); got != src {
+		t.Error("NewReader with nil callback should return the reader unchanged")
 	}
 }
 
