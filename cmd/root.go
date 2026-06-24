@@ -17,6 +17,7 @@ import (
 type options struct {
 	formula       string
 	cask          string
+	tap           string
 	cache         bool
 	noCache       bool
 	keep          bool
@@ -72,6 +73,7 @@ func init() {
 	f := rootCmd.Flags()
 	f.StringVar(&opts.formula, "formula", "", "check a formula bottle by name")
 	f.StringVar(&opts.cask, "cask", "", "check a cask by name")
+	f.StringVar(&opts.tap, "tap", "", "scan a formula/cask from a third-party tap, e.g. --tap user/repo (resolves metadata via 'brew info'; requires brew)")
 	f.BoolVar(&opts.cache, "cache", true, "on a clean verdict, place verified bytes in brew's cache")
 	f.BoolVar(&opts.noCache, "no-cache", false, "disable the cache hand-off (overrides --cache)")
 	f.BoolVar(&opts.keep, "keep", false, "keep the quarantine dir after the run (debugging)")

@@ -155,6 +155,41 @@ func (c *Client) GetCask(ctx context.Context, name string) (*Cask, error) {
 	return &k, nil
 }
 
+// ParseInfoV2 decodes `brew info --json=v2` output into the matching formula or
+// cask. The output has top-level "formulae" and "casks" arrays; for a tap
+// reference exactly one is populated. Either return value may be nil. Each
+// returned struct's Raw field is set to that entry's JSON for static analysis.
+func ParseInfoV2(infoJSON []byte) (*Formula, *Cask, error) {
+	var v struct {
+		Formulae []json.RawMessage `json:"formulae"`
+		Casks    []json.RawMessage `json:"casks"`
+	}
+	if err := json.Unmarshal(infoJSON, &v); err != nil {
+		return nil, nil, fmt.Errorf("decoding brew info JSON: %w", err)
+	}
+
+	var f *Formula
+	if len(v.Formulae) > 0 {
+		var parsed Formula
+		if err := json.Unmarshal(v.Formulae[0], &parsed); err != nil {
+			return nil, nil, fmt.Errorf("decoding tap formula: %w", err)
+		}
+		parsed.Raw = v.Formulae[0]
+		f = &parsed
+	}
+
+	var k *Cask
+	if len(v.Casks) > 0 {
+		var parsed Cask
+		if err := json.Unmarshal(v.Casks[0], &parsed); err != nil {
+			return nil, nil, fmt.Errorf("decoding tap cask: %w", err)
+		}
+		parsed.Raw = v.Casks[0]
+		k = &parsed
+	}
+	return f, k, nil
+}
+
 func (c *Client) get(ctx context.Context, url string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {

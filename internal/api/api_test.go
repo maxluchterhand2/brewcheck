@@ -163,6 +163,69 @@ func TestFormulaGitHubRepoPrefersHomepage(t *testing.T) {
 	}
 }
 
+func TestParseInfoV2(t *testing.T) {
+	formulaInfo := `{
+	  "formulae": [{
+	    "name": "tapfoo",
+	    "homepage": "https://github.com/acme/tapfoo",
+	    "versions": {"stable": "2.1.0"},
+	    "urls": {"stable": {"url": "https://github.com/acme/tapfoo/archive/v2.1.0.tar.gz"}},
+	    "bottle": {"stable": {"files": {
+	      "arm64_tahoe": {"url": "https://ghcr.io/v2/acme/tapfoo/blobs/sha256:abc", "sha256": "abc"}
+	    }}}
+	  }],
+	  "casks": []
+	}`
+	f, k, err := ParseInfoV2([]byte(formulaInfo))
+	if err != nil {
+		t.Fatalf("ParseInfoV2: %v", err)
+	}
+	if k != nil {
+		t.Errorf("expected no cask, got %+v", k)
+	}
+	if f == nil || f.Name != "tapfoo" || f.Versions.Stable != "2.1.0" {
+		t.Fatalf("formula not parsed correctly: %+v", f)
+	}
+	if f.GitHubRepo() != "acme/tapfoo" {
+		t.Errorf("GitHubRepo = %q, want acme/tapfoo", f.GitHubRepo())
+	}
+	if len(f.Raw) == 0 {
+		t.Error("formula Raw should be populated for static analysis")
+	}
+
+	caskInfo := `{
+	  "formulae": [],
+	  "casks": [{
+	    "token": "tapbar",
+	    "version": "9.9",
+	    "url": "https://downloads.example.com/tapbar.dmg",
+	    "sha256": "deadbeef",
+	    "homepage": "https://github.com/acme/tapbar"
+	  }]
+	}`
+	f, k, err = ParseInfoV2([]byte(caskInfo))
+	if err != nil {
+		t.Fatalf("ParseInfoV2 cask: %v", err)
+	}
+	if f != nil {
+		t.Errorf("expected no formula, got %+v", f)
+	}
+	if k == nil || k.Token != "tapbar" || k.URL != "https://downloads.example.com/tapbar.dmg" {
+		t.Fatalf("cask not parsed correctly: %+v", k)
+	}
+
+	// Empty info => both nil, no error.
+	f, k, err = ParseInfoV2([]byte(`{"formulae": [], "casks": []}`))
+	if err != nil || f != nil || k != nil {
+		t.Errorf("empty info should yield (nil,nil,nil); got (%v,%v,%v)", f, k, err)
+	}
+
+	// Malformed JSON => error.
+	if _, _, err := ParseInfoV2([]byte(`not json`)); err == nil {
+		t.Error("expected error on malformed JSON")
+	}
+}
+
 func TestNotFound(t *testing.T) {
 	c := newMockClient(t, func(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)

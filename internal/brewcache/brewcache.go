@@ -5,6 +5,7 @@
 package brewcache
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -19,6 +20,32 @@ import (
 func Available() bool {
 	_, err := exec.LookPath("brew")
 	return err == nil
+}
+
+// Info returns the raw `brew info --json=v2 <ref>` output for a formula/cask
+// reference (e.g. "user/repo/name" for a tap). This is how brewcheck resolves
+// metadata for third-party taps, which the formulae.brew.sh API does not serve.
+// brew may auto-tap (git-clone) an untapped repo to answer; that fetches only
+// the formula definitions, never the artifact.
+func Info(ctx context.Context, ref string) ([]byte, error) {
+	if !Available() {
+		return nil, fmt.Errorf("brew is required to resolve tap %q but is not on PATH", ref)
+	}
+	ctx, cancel := context.WithTimeout(ctx, 120*time.Second) // cloning a tap can be slow
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "brew", "info", "--json=v2", ref)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = err.Error()
+		}
+		return nil, fmt.Errorf("`brew info --json=v2 %s` failed: %s", ref, msg)
+	}
+	return stdout.Bytes(), nil
 }
 
 // CachePath returns the absolute path brew would use for the given artifact.

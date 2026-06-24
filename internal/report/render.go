@@ -37,6 +37,9 @@ func (r *Report) Human(w io.Writer) {
 		}
 		p("  %-12s %s (%s)", "sha256:", r.SHA256, verified)
 	}
+	if r.FromCache {
+		p("  %-12s %s", "cache:", "found — scanned the existing file in place (not re-downloaded)")
+	}
 	p("")
 
 	// Layers
@@ -95,7 +98,7 @@ func (r *Report) Human(w io.Writer) {
 	case VerdictSuspicious:
 		p("  Suspicious patterns or an unverifiable hash were found — review above.")
 	case VerdictMalicious:
-		p("  Known-malicious indicators found. The downloaded bytes were deleted.")
+		p("  Known-malicious indicators found (see the Action line for what was done).")
 	case VerdictError:
 		if r.Error != "" {
 			p("  %s", r.Error)
@@ -150,6 +153,14 @@ func actionLine(r *Report) string {
 		return "quarantined bytes deleted"
 	case "kept":
 		return "quarantined bytes kept (not cached)"
+	case "already-cached":
+		return fmt.Sprintf("left in place — already in Homebrew cache (%s)", r.CachePath)
+	case "kept-in-cache":
+		return fmt.Sprintf("left in Homebrew cache despite suspicion — review before installing (%s)", r.CachePath)
+	case "deleted-from-cache":
+		return "removed from Homebrew cache (malicious)"
+	case "cache-delete-failed":
+		return fmt.Sprintf("FAILED to remove from Homebrew cache — delete it manually: %s", r.CachePath)
 	default:
 		return r.Action
 	}

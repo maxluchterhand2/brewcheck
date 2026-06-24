@@ -17,6 +17,10 @@ const maxDownloadSize int64 = 2 << 30
 // resolveTarget figures out which artifact to fetch based on the flags and any
 // positional name, querying both API endpoints when the type is ambiguous.
 func resolveTarget(ctx context.Context, positional string) (*resolved, error) {
+	if opts.tap != "" {
+		return resolveTap(ctx, opts.tap, positional)
+	}
+
 	client := api.New()
 
 	switch {

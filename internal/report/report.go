@@ -7,7 +7,8 @@ package report
 
 // SchemaVersion is bumped whenever the --json output shape changes.
 // 0.2.0 added the HESITANT verdict and per-layer Credibility.
-const SchemaVersion = "0.2.0"
+// 0.3.0 added from_cache (artifact scanned in place from brew's cache).
+const SchemaVersion = "0.3.0"
 
 // Verdict is the aggregated outcome of a run.
 type Verdict string
@@ -105,9 +106,10 @@ type Report struct {
 	HashVerified  bool          `json:"hash_verified"`
 	Layers        []LayerResult `json:"layers"`
 	Verdict       Verdict       `json:"verdict"`
+	FromCache     bool          `json:"from_cache"` // scanned in place from brew's cache (not downloaded)
 	Cached        bool          `json:"cached"`
 	CachePath     string        `json:"cache_path,omitempty"`
-	Action        string        `json:"action"` // "cached" | "deleted" | "kept"
+	Action        string        `json:"action"` // cached | deleted | kept | already-cached | kept-in-cache | deleted-from-cache
 	Error         string        `json:"error,omitempty"`
 }
 

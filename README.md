@@ -26,6 +26,23 @@ before it has been verified and scanned:
    `HESITANT` verdict with a verified hash.
 5. **Delete** the quarantined bytes on a `SUSPICIOUS`/`MALICIOUS`/`ERROR` verdict.
 
+### Reusing brew's cache
+
+Before downloading, brewcheck checks whether the artifact is **already in brew's
+cache** and, if its sha256 matches Homebrew's published hash, scans that file in
+place instead of re-downloading. Because the file is the user's own cached
+download (not radioactive quarantine bytes), the cleanup policy is gentler:
+
+| Verdict | Fresh download | Already in brew cache |
+|---------|----------------|-----------------------|
+| `CLEAN` / `HESITANT` | placed in cache | left in place |
+| `SUSPICIOUS` | deleted | **kept** (warn only) |
+| `MALICIOUS` | deleted | **removed from the cache** |
+
+Reuse only happens when the hash is verifiable (never for a cask `no_check`) and
+requires brew (for the cache path). Evicting a `MALICIOUS` file from the cache is
+a safety action and happens regardless of `--no-cache`.
+
 The sha256 check is load-bearing twice: it proves the scanned bytes are
 byte-identical to what brew will install, and it closes the TOCTOU window —
 brew re-verifies the cache file's hash at install time, so cached bytes are only
@@ -46,6 +63,7 @@ Requires Go (current stable). The only third-party dependency is
 brewcheck --formula <name>      # check a formula bottle (from ghcr.io)
 brewcheck --cask <name>         # check a cask (direct vendor/GitHub URL)
 brewcheck <name>                # auto-resolve type (errors if ambiguous)
+brewcheck --tap user/repo <name>   # check a formula/cask from a third-party tap
 ```
 
 ### Flags
@@ -53,6 +71,7 @@ brewcheck <name>                # auto-resolve type (errors if ambiguous)
 | Flag | Default | Meaning |
 |------|---------|---------|
 | `--formula <name>` / `--cask <name>` | — | explicit type (mutually exclusive) |
+| `--tap <user/repo>` | — | resolve `<name>` from a third-party tap instead of the core API (requires brew) |
 | `--cache` / `--no-cache` | `true` | place verified bytes in brew's cache on a clean verdict |
 | `--keep` | `false` | keep the quarantine dir (debugging) |
 | `--cloud` | `false` | allow opt-in VirusTotal **file upload** when file hashes are unknown to VirusTotal |
@@ -169,9 +188,34 @@ size/count caps. All extraction is sandboxed inside the quarantine.
 
 ## Talking to brew (read-only)
 
-brewcheck invokes `brew` for exactly one thing: `brew --cache [--cask] <name>`
-to learn where brew *would* place a download. It never asks brew to download. If
-brew isn't installed, brewcheck still scans and just skips the cache hand-off.
+brewcheck invokes `brew` for the cache oracle — `brew --cache [--cask] <name>`,
+to learn where brew *would* place a download — and, with `--tap`, for read-only
+metadata (`brew info --json=v2`). It never asks brew to download an artifact. If
+brew isn't installed, the core path still scans and just skips the cache
+hand-off; `--tap`, however, requires brew (see below).
+
+## Third-party taps
+
+The formulae.brew.sh JSON API only serves the official `homebrew/core` and
+`homebrew/cask` taps. To scan something from a third-party tap, pass `--tap`:
+
+```sh
+brewcheck --tap nikitabobko/tap --cask aerospace
+brewcheck --tap felixkratz/formulae sketchybar      # positional name works too
+```
+
+For taps, brewcheck resolves metadata with `brew info --json=v2 <tap>/<name>`
+(brew auto-taps the repo if needed — that fetches only the *formula
+definitions*, never the artifact). Everything after resolution is identical to
+the core path: download into quarantine → verify sha256 → scan → cache. Notes:
+
+- **Requires brew** (the API can't serve taps); a clear error is shown if it's
+  absent.
+- The artifact is fetched directly from wherever the definition points — ghcr.io
+  (OCI) for bottles published there, or a plain `GET` for bottles/casks hosted on
+  GitHub releases or a custom `root_url`.
+- Still **bottles-only** for formulae: a source-build tap formula with no bottle
+  for your platform is reported as an error, not built.
 
 ## Project layout
 
