@@ -28,6 +28,7 @@ type resolved struct {
 	publishedHash string
 	defJSON       []byte
 	githubRepo    string // upstream "owner/repo", or "" if not on GitHub
+	fromSource    bool   // scanning the upstream source tarball, not a bottle
 	fetcher       download.Fetcher
 }
 
@@ -125,8 +126,9 @@ func runPipeline(ctx context.Context, positional string, send func(tea.Msg)) *re
 		}
 	}
 	r.FromCache = fromCache
+	r.BuildFromSource = res.fromSource
 	r.SHA256 = dl.SHA256
-	logf("artifact %d bytes, sha256=%s (from cache: %v)", dl.Size, dl.SHA256, fromCache)
+	logf("artifact %d bytes, sha256=%s (from cache: %v, source build: %v)", dl.Size, dl.SHA256, fromCache, res.fromSource)
 
 	// Verify BEFORE anything else touches the bytes.
 	verifyLayer, abort := verifyHash(r, res.publishedHash, dl.SHA256)
@@ -174,7 +176,7 @@ func runPipeline(ctx context.Context, positional string, send func(tea.Msg)) *re
 	r.Verdict = report.AggregateVerdict(r.Layers)
 
 	// Cache-or-delete decision.
-	decideAction(ctx, r, dl.Path, fromCache, cachePath, logf)
+	decideAction(ctx, r, dl.Path, fromCache, res.fromSource, cachePath, logf)
 	return r
 }
 
@@ -250,7 +252,7 @@ func reuseFromCache(ctx context.Context, res *resolved, logf func(string, ...any
 	if !brewcache.Available() {
 		return "", "", 0, false
 	}
-	cp, err := brewcache.CachePath(ctx, res.name, res.kind)
+	cp, err := brewcache.CachePath(ctx, res.name, res.kind, res.fromSource)
 	if err != nil {
 		logf("could not determine cache path: %v", err)
 		return "", "", 0, false
@@ -274,7 +276,7 @@ func reuseFromCache(ctx context.Context, res *resolved, logf func(string, ...any
 // decideAction decides what to do with the artifact after the verdict. The
 // behavior differs depending on whether we scanned a fresh download (quarantine)
 // or a file already living in brew's cache.
-func decideAction(ctx context.Context, r *report.Report, artifact string, fromCache bool, cachePath string, logf func(string, ...any)) {
+func decideAction(ctx context.Context, r *report.Report, artifact string, fromCache, fromSource bool, cachePath string, logf func(string, ...any)) {
 	if fromCache {
 		decideCachedAction(r, cachePath, logf)
 		return
@@ -290,7 +292,7 @@ func decideAction(ctx context.Context, r *report.Report, artifact string, fromCa
 			r.Action = actionFor(false)
 			return
 		}
-		dest, err := brewcache.CachePath(ctx, r.Name, r.Kind)
+		dest, err := brewcache.CachePath(ctx, r.Name, r.Kind, fromSource)
 		if err != nil {
 			logf("could not determine cache path: %v", err)
 			r.Action = actionFor(false)

@@ -49,15 +49,19 @@ func Info(ctx context.Context, ref string) ([]byte, error) {
 }
 
 // CachePath returns the absolute path brew would use for the given artifact.
-// kind must be "formula" or "cask". Returns ("", nil) semantics are avoided:
-// callers should check Available() first.
-func CachePath(ctx context.Context, name, kind string) (string, error) {
+// kind must be "formula" or "cask". When buildFromSource is true, the source
+// tarball cache path is requested (brew caches source downloads separately from
+// bottles). Callers should check Available() first.
+func CachePath(ctx context.Context, name, kind string, buildFromSource bool) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	args := []string{"--cache"}
 	if kind == "cask" {
 		args = append(args, "--cask")
+	}
+	if buildFromSource {
+		args = append(args, "--build-from-source")
 	}
 	args = append(args, name)
 

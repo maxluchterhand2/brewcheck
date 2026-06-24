@@ -23,7 +23,11 @@ func (r *Report) Human(w io.Writer) {
 
 	p("brewcheck report")
 	p("================")
-	p("  %-12s %s (%s)", "name:", r.Name, r.Kind)
+	kind := r.Kind
+	if r.BuildFromSource {
+		kind += ", source build"
+	}
+	p("  %-12s %s (%s)", "name:", r.Name, kind)
 	if r.Version != "" {
 		p("  %-12s %s", "version:", r.Version)
 	}

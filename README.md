@@ -1,7 +1,8 @@
 # brewcheck
 
-`brewcheck` fetches a Homebrew **formula bottle** or **cask** artifact *without
-using the `brew` binary to download it*, verifies its sha256 against Homebrew's
+`brewcheck` fetches a Homebrew **formula** (bottle or source tarball) or **cask**
+artifact *without using the `brew` binary to download it*, verifies its sha256
+against Homebrew's
 published hash, scans the verified bytes for malware and suspicious patterns,
 weighs the credibility of the upstream GitHub author, and — **only on a clean
 verdict** — hands the bytes to Homebrew's cache so a later `brew install` skips
@@ -25,28 +26,6 @@ before it has been verified and scanned:
 4. **Cache** the bytes (at the path `brew --cache` reports) on a `CLEAN` or
    `HESITANT` verdict with a verified hash.
 5. **Delete** the quarantined bytes on a `SUSPICIOUS`/`MALICIOUS`/`ERROR` verdict.
-
-### Reusing brew's cache
-
-Before downloading, brewcheck checks whether the artifact is **already in brew's
-cache** and, if its sha256 matches Homebrew's published hash, scans that file in
-place instead of re-downloading. Because the file is the user's own cached
-download (not radioactive quarantine bytes), the cleanup policy is gentler:
-
-| Verdict | Fresh download | Already in brew cache |
-|---------|----------------|-----------------------|
-| `CLEAN` / `HESITANT` | placed in cache | left in place |
-| `SUSPICIOUS` | deleted | **kept** (warn only) |
-| `MALICIOUS` | deleted | **removed from the cache** |
-
-Reuse only happens when the hash is verifiable (never for a cask `no_check`) and
-requires brew (for the cache path). Evicting a `MALICIOUS` file from the cache is
-a safety action and happens regardless of `--no-cache`.
-
-The sha256 check is load-bearing twice: it proves the scanned bytes are
-byte-identical to what brew will install, and it closes the TOCTOU window —
-brew re-verifies the cache file's hash at install time, so cached bytes are only
-used because they still match.
 
 ## Install / build
 
@@ -72,6 +51,7 @@ brewcheck --tap user/repo <name>   # check a formula/cask from a third-party tap
 |------|---------|---------|
 | `--formula <name>` / `--cask <name>` | — | explicit type (mutually exclusive) |
 | `--tap <user/repo>` | — | resolve `<name>` from a third-party tap instead of the core API (requires brew) |
+| `--build-from-source` / `-s` | `false` | scan the upstream source tarball instead of a bottle (auto-used for source-only formulae) |
 | `--cache` / `--no-cache` | `true` | place verified bytes in brew's cache on a clean verdict |
 | `--keep` | `false` | keep the quarantine dir (debugging) |
 | `--cloud` | `false` | allow opt-in VirusTotal **file upload** when file hashes are unknown to VirusTotal |
@@ -82,6 +62,27 @@ brewcheck --tap user/repo <name>   # check a formula/cask from a third-party tap
 | `--allow-new-repos` | `false` | don't flag GitHub repos younger than 30 days as `SUSPICIOUS` (credibility caps at `HESITANT` instead) |
 | `--no-progress` | `false` | disable progress indicators (auto-disabled when stderr isn't a TTY or with `--verbose`) |
 
+### Reusing brew's cache
+
+Before downloading, brewcheck checks whether the artifact is **already in brew's
+cache** and, if its sha256 matches Homebrew's published hash, scans that file in
+place instead of re-downloading. Because the file is the user's own cached
+download (not radioactive quarantine bytes), the cleanup policy is gentler:
+
+| Verdict | Fresh download | Already in brew cache |
+|---------|----------------|-----------------------|
+| `CLEAN` / `HESITANT` | placed in cache | left in place |
+| `SUSPICIOUS` | deleted | **kept** (warn only) |
+| `MALICIOUS` | deleted | **removed from the cache** |
+
+Reuse only happens when the hash is verifiable (never for a cask `no_check`) and
+requires brew (for the cache path). Evicting a `MALICIOUS` file from the cache is
+a safety action and happens regardless of `--no-cache`.
+
+The sha256 check is load-bearing twice: it proves the scanned bytes are
+byte-identical to what brew will install, and it closes the TOCTOU window —
+brew re-verifies the cache file's hash at install time, so cached bytes are only
+used because they still match.
 
 ### TUI vs. plain output
 
@@ -224,8 +225,25 @@ the core path: download into quarantine → verify sha256 → scan → cache. No
 - The artifact is fetched directly from wherever the definition points — ghcr.io
   (OCI) for bottles published there, or a plain `GET` for bottles/casks hosted on
   GitHub releases or a custom `root_url`.
-- Still **bottles-only** for formulae: a source-build tap formula with no bottle
-  for your platform is reported as an error, not built.
+- Source-only tap formulae (no bottle) fall back to a source build automatically
+  (see below), so they're scanned rather than rejected.
+
+## Source builds
+
+For a formula without a bottle for your platform — or when you pass
+`--build-from-source` / `-s` — brewcheck scans the **upstream source tarball**
+(`urls.stable.url`) instead of a bottle, exactly the artifact `brew install`
+would compile. It's the same pipeline: download → verify against the formula's
+published `urls.stable.checksum` → extract & scan the source → cache.
+
+- The bottle is still preferred when one exists; source is the fallback (or
+  forced with `-s`), matching `brew install` / `brew install --build-from-source`.
+- The source tarball is cached at brew's *source* path (`brew --cache
+  --build-from-source <name>`), distinct from the bottle path — so cache reuse
+  and the clean-verdict hand-off both target the right file.
+- Git/HEAD sources (a repo URL with no published checksum) aren't supported:
+  with nothing to verify against, the hash layer flags the run and never caches.
+- The report labels these runs `(formula, source build)`.
 
 ## Project layout
 
@@ -260,15 +278,6 @@ credibility scoring (weights, the sub-month `SUSPICIOUS` exception, and the
 contributor-count `Link`-header parse). HTTP is mocked for the API/OCI/GitHub
 clients.
 
-## Known limitations / follow-ups (not in v0.1)
-
-- **Only the current host platform's bottle is checked.** Cross-platform /
-  multi-bottle checking in one run is a follow-up.
-- No source-build (non-bottle) formula inspection — bottles only.
-- In-process YARA via `hillu/go-yara` (currently shells out to `yara`).
-- User-supplied rule paths (`--semgrep-rules`, `--yara-rules`) and a
-  rule-update mechanism.
-- capa is not yet wired to a representative binary in most cases.
 
 > Reminder, kept visible everywhere: this tool detects known malware and
 > suspicious patterns; it is not a defense against a novel, targeted

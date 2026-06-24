@@ -70,24 +70,9 @@ func tapTarget(positional string) (name, kindHint string, err error) {
 }
 
 func buildTapFormula(ref string, f *api.Formula) (*resolved, error) {
-	platform, err := api.HostPlatform()
-	if err != nil {
-		return nil, err
-	}
-	key, bottle, err := f.SelectBottle(platform)
-	if err != nil {
-		return nil, fmt.Errorf("no bottle for %q on %s (brewcheck v0.1 is bottles-only; source-build taps are unsupported): %w", ref, platform, err)
-	}
-	return &resolved{
-		name:          ref,
-		kind:          "formula",
-		version:       f.Versions.Stable,
-		sourceURL:     bottle.URL,
-		publishedHash: bottle.SHA256,
-		defJSON:       f.Raw,
-		githubRepo:    f.GitHubRepo(),
-		fetcher:       bottleFetcher(bottle.URL, f.Name, f.Versions.Stable, key),
-	}, nil
+	// Same bottle-or-source resolution as a core formula; taps are frequently
+	// source-only, so the source fallback matters here.
+	return formulaTarget(ref, f)
 }
 
 func buildTapCask(ref string, k *api.Cask) (*resolved, error) {

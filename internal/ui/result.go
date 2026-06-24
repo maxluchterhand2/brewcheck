@@ -110,7 +110,11 @@ func (m Model) resultView() string {
 	// Header.
 	header := titleStyle.Render("🍺 brewcheck")
 	if r.Name != "" {
-		meta := r.Name + dimStyle.Render(" ("+r.Kind+")")
+		kind := r.Kind
+		if r.BuildFromSource {
+			kind += ", source build"
+		}
+		meta := r.Name + dimStyle.Render(" ("+kind+")")
 		if r.Version != "" {
 			meta += " " + r.Version
 		}

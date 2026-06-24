@@ -15,19 +15,20 @@ import (
 
 // options holds parsed flag values for a run.
 type options struct {
-	formula       string
-	cask          string
-	tap           string
-	cache         bool
-	noCache       bool
-	keep          bool
-	cloud         bool
-	maxUploadSize int64
-	jsonOut       bool
-	verbose       bool
-	quarantineDir string
-	allowNewRepos bool
-	noProgress    bool
+	formula         string
+	cask            string
+	tap             string
+	buildFromSource bool
+	cache           bool
+	noCache         bool
+	keep            bool
+	cloud           bool
+	maxUploadSize   int64
+	jsonOut         bool
+	verbose         bool
+	quarantineDir   string
+	allowNewRepos   bool
+	noProgress      bool
 }
 
 var opts options
@@ -74,6 +75,7 @@ func init() {
 	f.StringVar(&opts.formula, "formula", "", "check a formula bottle by name")
 	f.StringVar(&opts.cask, "cask", "", "check a cask by name")
 	f.StringVar(&opts.tap, "tap", "", "scan a formula/cask from a third-party tap, e.g. --tap user/repo (resolves metadata via 'brew info'; requires brew)")
+	f.BoolVarP(&opts.buildFromSource, "build-from-source", "s", false, "scan the upstream source tarball instead of a bottle (forced for source-only formulae)")
 	f.BoolVar(&opts.cache, "cache", true, "on a clean verdict, place verified bytes in brew's cache")
 	f.BoolVar(&opts.noCache, "no-cache", false, "disable the cache hand-off (overrides --cache)")
 	f.BoolVar(&opts.keep, "keep", false, "keep the quarantine dir after the run (debugging)")

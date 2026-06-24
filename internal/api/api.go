@@ -41,7 +41,8 @@ type Formula struct {
 	} `json:"versions"`
 	URLs struct {
 		Stable struct {
-			URL string `json:"url"`
+			URL      string `json:"url"`
+			Checksum string `json:"checksum"`
 		} `json:"stable"`
 	} `json:"urls"`
 	Bottle struct {
@@ -59,6 +60,12 @@ type Formula struct {
 func (f *Formula) GitHubRepo() string {
 	return GitHubRepoFrom(f.Homepage, f.URLs.Stable.URL)
 }
+
+// SourceURL is the upstream source tarball URL brew would download for a
+// build-from-source install. SourceChecksum is its published sha256 ("" if the
+// formula publishes no checksum, e.g. a git/HEAD source).
+func (f *Formula) SourceURL() string      { return f.URLs.Stable.URL }
+func (f *Formula) SourceChecksum() string { return f.URLs.Stable.Checksum }
 
 // BottleFile is one platform's bottle entry.
 type BottleFile struct {

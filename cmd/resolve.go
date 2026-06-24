@@ -7,7 +7,6 @@ import (
 
 	"brewcheck/internal/api"
 	"brewcheck/internal/download"
-	"brewcheck/internal/oci"
 )
 
 // maxDownloadSize guards against runaway downloads (2 GiB). Bottles and casks
@@ -84,23 +83,53 @@ func resolveCask(ctx context.Context, client *api.Client, name string) (*resolve
 }
 
 func buildFormula(f *api.Formula) (*resolved, error) {
+	return formulaTarget(f.Name, f)
+}
+
+// formulaTarget resolves a formula to either its bottle or its upstream source
+// tarball. It prefers the bottle for the host platform; if none exists (or
+// --build-from-source is set), it falls back to the source tarball — the same
+// choice `brew install` makes. name is the display/cache reference (the bare
+// name for core formulae, the full "tap/name" ref for taps).
+func formulaTarget(name string, f *api.Formula) (*resolved, error) {
 	platform, err := api.HostPlatform()
 	if err != nil {
 		return nil, err
 	}
-	key, bottle, err := f.SelectBottle(platform)
-	if err != nil {
-		return nil, err
+
+	if !opts.buildFromSource {
+		if key, bottle, err := f.SelectBottle(platform); err == nil {
+			return &resolved{
+				name:          name,
+				kind:          "formula",
+				version:       f.Versions.Stable,
+				sourceURL:     bottle.URL,
+				publishedHash: bottle.SHA256,
+				defJSON:       f.Raw,
+				githubRepo:    f.GitHubRepo(),
+				fetcher:       bottleFetcher(bottle.URL, f.Name, f.Versions.Stable, key),
+			}, nil
+		}
+		// No bottle for this platform — fall through to a source build.
+	}
+
+	src := f.SourceURL()
+	if src == "" {
+		if opts.buildFromSource {
+			return nil, fmt.Errorf("formula %q has no source URL to build from", name)
+		}
+		return nil, fmt.Errorf("formula %q has no bottle for %s and no source URL to fall back to", name, platform)
 	}
 	return &resolved{
-		name:          f.Name,
+		name:          name,
 		kind:          "formula",
 		version:       f.Versions.Stable,
-		sourceURL:     bottle.URL,
-		publishedHash: bottle.SHA256,
+		sourceURL:     src,
+		publishedHash: f.SourceChecksum(),
 		defJSON:       f.Raw,
 		githubRepo:    f.GitHubRepo(),
-		fetcher:       oci.NewBlobFetcher(bottle.URL, f.Name, f.Versions.Stable, key),
+		fromSource:    true,
+		fetcher:       download.NewHTTPFetcher(src, nil),
 	}, nil
 }
 

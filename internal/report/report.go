@@ -8,7 +8,8 @@ package report
 // SchemaVersion is bumped whenever the --json output shape changes.
 // 0.2.0 added the HESITANT verdict and per-layer Credibility.
 // 0.3.0 added from_cache (artifact scanned in place from brew's cache).
-const SchemaVersion = "0.3.0"
+// 0.4.0 added build_from_source (scanned the upstream source tarball).
+const SchemaVersion = "0.4.0"
 
 // Verdict is the aggregated outcome of a run.
 type Verdict string
@@ -97,20 +98,21 @@ func (l *LayerResult) AddFinding(sev Severity, title, detail, loc string) {
 
 // Report is the full structured result of a run.
 type Report struct {
-	SchemaVersion string        `json:"schema_version"`
-	Name          string        `json:"name"`
-	Kind          string        `json:"kind"` // "formula" | "cask"
-	Version       string        `json:"version"`
-	SourceURL     string        `json:"source_url"`
-	SHA256        string        `json:"sha256"`
-	HashVerified  bool          `json:"hash_verified"`
-	Layers        []LayerResult `json:"layers"`
-	Verdict       Verdict       `json:"verdict"`
-	FromCache     bool          `json:"from_cache"` // scanned in place from brew's cache (not downloaded)
-	Cached        bool          `json:"cached"`
-	CachePath     string        `json:"cache_path,omitempty"`
-	Action        string        `json:"action"` // cached | deleted | kept | already-cached | kept-in-cache | deleted-from-cache
-	Error         string        `json:"error,omitempty"`
+	SchemaVersion   string        `json:"schema_version"`
+	Name            string        `json:"name"`
+	Kind            string        `json:"kind"` // "formula" | "cask"
+	Version         string        `json:"version"`
+	SourceURL       string        `json:"source_url"`
+	SHA256          string        `json:"sha256"`
+	HashVerified    bool          `json:"hash_verified"`
+	Layers          []LayerResult `json:"layers"`
+	Verdict         Verdict       `json:"verdict"`
+	BuildFromSource bool          `json:"build_from_source"` // scanned the upstream source tarball, not a bottle
+	FromCache       bool          `json:"from_cache"`        // scanned in place from brew's cache (not downloaded)
+	Cached          bool          `json:"cached"`
+	CachePath       string        `json:"cache_path,omitempty"`
+	Action          string        `json:"action"` // cached | deleted | kept | already-cached | kept-in-cache | deleted-from-cache
+	Error           string        `json:"error,omitempty"`
 }
 
 // AggregateVerdict computes the overall verdict from the layers that ran.
