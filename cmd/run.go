@@ -13,7 +13,10 @@ import (
 	"brewcheck/internal/progress"
 	"brewcheck/internal/report"
 	"brewcheck/internal/scan"
+	"brewcheck/internal/ui"
 	"brewcheck/internal/verify"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 // resolved describes a single artifact to fetch, independent of kind.
@@ -28,33 +31,73 @@ type resolved struct {
 	fetcher       download.Fetcher
 }
 
-// run executes the whole pipeline and returns the process exit code.
+// run dispatches to the interactive (bubbletea) UI or to plain text output, then
+// returns the process exit code. The actual orchestration lives in runPipeline;
+// the two modes differ only in how progress and the result are rendered.
 func run(ctx context.Context, positional string) int {
+	if useTUI() {
+		return runTUI(ctx, positional)
+	}
+	r := runPipeline(ctx, positional, func(tea.Msg) {})
+	emit(r)
+	return r.Verdict.ExitCode()
+}
+
+// useTUI reports whether to render the interactive bubbletea UI: only when
+// stdout is a terminal and the user hasn't opted into plain/machine output.
+func useTUI() bool {
+	return progress.IsTTY(os.Stdout) && !opts.noProgress && !opts.jsonOut && !opts.verbose
+}
+
+// runTUI runs the pipeline in the background, feeding a bubbletea model, and
+// leaves the styled result on screen when it finishes.
+func runTUI(ctx context.Context, positional string) int {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	p := tea.NewProgram(ui.New(cancel), tea.WithOutput(os.Stdout))
+	go func() {
+		r := runPipeline(ctx, positional, p.Send)
+		p.Send(ui.DoneMsg{Report: r})
+	}()
+	final, err := p.Run()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error: could not start the interactive UI:", err)
+		return report.VerdictError.ExitCode()
+	}
+	m := final.(ui.Model)
+	// Print the full report as normal stdout output so it stays in the terminal
+	// scrollback in its entirety, regardless of the terminal height.
+	if res := m.Result(); res != "" {
+		fmt.Print(res)
+	}
+	return m.ExitCode()
+}
+
+// runPipeline does the whole resolve → fetch → verify → scan → decide flow,
+// emitting UI events through send (a no-op in plain mode). It never prints; the
+// caller renders the returned report.
+func runPipeline(ctx context.Context, positional string, send func(tea.Msg)) *report.Report {
 	logf := func(format string, a ...any) {
 		if opts.verbose {
 			fmt.Fprintf(os.Stderr, "[brewcheck] "+format+"\n", a...)
 		}
 	}
-
-	// Progress indicators render on stderr (stdout/--json stay clean) only when
-	// interactive; --verbose's step logs would otherwise fight the spinner.
-	showProgress := progress.StderrIsTTY() && !opts.verbose && !opts.noProgress
-
 	r := &report.Report{}
 
-	sp := progress.NewSpinner(showProgress, "resolving "+displayName(positional))
+	send(ui.PhaseMsg{Phase: ui.PhaseResolving})
 	res, err := resolveTarget(ctx, positional)
-	sp.Stop()
 	if err != nil {
-		return emitError(r, err)
+		return failed(r, err)
 	}
 	r.Name, r.Kind, r.Version, r.SourceURL = res.name, res.kind, res.version, res.sourceURL
+	send(ui.ResolvedMsg{Name: res.name, Kind: res.kind, Version: res.version, Source: res.sourceURL})
 	logf("resolved %s %s version %s", res.kind, res.name, res.version)
 
 	// Quarantine: isolated, restrictive-perms dir brew knows nothing about.
 	q, err := download.NewQuarantine(opts.quarantineDir, opts.keep)
 	if err != nil {
-		return emitError(r, err)
+		return failed(r, err)
 	}
 	defer q.Cleanup()
 	logf("quarantine: %s", q.Dir)
@@ -66,25 +109,19 @@ func run(ctx context.Context, positional string) int {
 		fromCache bool
 		cachePath string
 	)
-	checkSpin := progress.NewSpinner(showProgress, "checking brew cache")
-	cp, sum, size, hit := reuseFromCache(ctx, res, logf)
-	checkSpin.Stop()
-	if hit {
+	if cp, sum, size, hit := reuseFromCache(ctx, res, logf); hit {
 		logf("reusing verified file already in brew cache: %s", cp)
 		dl = &download.Result{Path: cp, SHA256: sum, Size: size}
 		fromCache, cachePath = true, cp
+		send(ui.CacheHitMsg{})
 	} else {
-		// Download (streaming + sha256) into quarantine, with a percentage bar.
 		logf("downloading %s", res.sourceURL)
-		bar := progress.NewBar(showProgress, fmt.Sprintf("downloading %s %s", res.kind, res.name))
-		var onProgress func(done, total int64)
-		if bar != nil {
-			onProgress = bar.Update
-		}
-		dl, err = q.Fetch(ctx, res.fetcher, maxDownloadSize, onProgress)
-		bar.Finish()
+		send(ui.PhaseMsg{Phase: ui.PhaseDownloading})
+		dl, err = q.Fetch(ctx, res.fetcher, maxDownloadSize, func(done, total int64) {
+			send(ui.DownloadMsg{Done: done, Total: total})
+		})
 		if err != nil {
-			return emitError(r, fmt.Errorf("download failed: %w", err))
+			return failed(r, fmt.Errorf("download failed: %w", err))
 		}
 	}
 	r.FromCache = fromCache
@@ -98,16 +135,11 @@ func run(ctx context.Context, positional string) int {
 		r.Layers = []report.LayerResult{verifyLayer}
 		r.Verdict = report.VerdictSuspicious
 		r.Action = "deleted"
-		emit(r)
-		return r.Verdict.ExitCode()
+		return r
 	}
 
-	// Extract + scan can take a while (local scanners + VT/GitHub network), with
-	// no measurable total — show an indeterminate spinner for the whole phase.
-	scanSpin := progress.NewSpinner(showProgress, "scanning "+res.name)
-	defer scanSpin.Stop() // safety net; also stopped explicitly below before output
-
 	// Extract for scanning (never mount/run). Best-effort.
+	send(ui.PhaseMsg{Phase: ui.PhaseScanning})
 	scriptPaths, scanTargets := prepareScanInputs(ctx, q, dl.Path, res.kind, logf)
 
 	// Run the inspection pipeline over the verified artifact.
@@ -129,12 +161,13 @@ func run(ctx context.Context, positional string) int {
 		GitHubRepo:     res.githubRepo,
 		GitHubToken:    githubToken(),
 		AllowNewRepos:  opts.allowNewRepos,
-		ShowProgress:   showProgress,
-		OnUploadStart:  scanSpin.Stop, // clear the scan spinner before the upload bar
-		Logf:           logf,
+		OnUploadStart:  func() { send(ui.PhaseMsg{Phase: ui.PhaseUploading}) },
+		OnUploadProgress: func(done, total int64) {
+			send(ui.UploadMsg{Done: done, Total: total})
+		},
+		Logf: logf,
 	}
 	layers := scan.Run(ctx, in)
-	scanSpin.Stop() // clear the indicator before any report output
 
 	// Verification layer leads the report.
 	r.Layers = append([]report.LayerResult{verifyLayer}, layers...)
@@ -142,24 +175,17 @@ func run(ctx context.Context, positional string) int {
 
 	// Cache-or-delete decision.
 	decideAction(ctx, r, dl.Path, fromCache, cachePath, logf)
-
-	emit(r)
-	return r.Verdict.ExitCode()
+	return r
 }
 
-// displayName picks the best label for the pre-resolution spinner from whatever
-// the user supplied (positional name or --formula/--cask flag).
-func displayName(positional string) string {
-	switch {
-	case positional != "":
-		return positional
-	case opts.formula != "":
-		return opts.formula
-	case opts.cask != "":
-		return opts.cask
-	default:
-		return "target"
+// failed finalizes an ERROR report without printing anything.
+func failed(r *report.Report, err error) *report.Report {
+	r.Verdict = report.VerdictError
+	r.Error = err.Error()
+	if r.Action == "" {
+		r.Action = actionFor(false)
 	}
+	return r
 }
 
 // verifyHash builds the verification layer and reports whether to abort.
@@ -328,17 +354,6 @@ func emit(r *report.Report) {
 		return
 	}
 	r.Human(os.Stdout)
-}
-
-// emitError finalizes an ERROR report and returns the exit code.
-func emitError(r *report.Report, err error) int {
-	r.Verdict = report.VerdictError
-	r.Error = err.Error()
-	if r.Action == "" {
-		r.Action = actionFor(false)
-	}
-	emit(r)
-	return report.VerdictError.ExitCode()
 }
 
 // githubToken returns an optional GitHub API token for higher rate limits,

@@ -54,8 +54,8 @@ used because they still match.
 go build -o brewcheck .
 ```
 
-Requires Go (current stable). The only third-party dependency is
-`spf13/cobra`.
+Requires Go (current stable). Third-party dependencies: `spf13/cobra` (CLI) and
+`charmbracelet/bubbletea`+`bubbles`+`lipgloss` (the UI).
 
 ## Usage
 
@@ -82,6 +82,16 @@ brewcheck --tap user/repo <name>   # check a formula/cask from a third-party tap
 | `--allow-new-repos` | `false` | don't flag GitHub repos younger than 30 days as `SUSPICIOUS` (credibility caps at `HESITANT` instead) |
 | `--no-progress` | `false` | disable progress indicators (auto-disabled when stderr isn't a TTY or with `--verbose`) |
 
+
+### TUI vs. plain output
+
+The UI runs **only** when stdout is a TTY. It falls back to plain text on stdout
+when any of these hold:
+
+- stdout is not a terminal (piped/redirected),
+- `--no-progress` is passed,
+- `--json` is passed (machine-readable output), or
+- `--verbose` is passed (step logs go to stderr instead).
 
 ### Environment variables
 
@@ -229,8 +239,9 @@ internal/
   extract/           safe extraction (7z, pkgutil --expand), zip-slip guards
   scan/              static, vt, semgrep, clamav, yara, capa, github + pipeline orchestration
   brewcache/         `brew --cache` path oracle + atomic move
-  report/            human + JSON report rendering
-  progress/          stderr progress bar + spinner (TTY-only, no deps)
+  report/            verdict/finding types + plain human & JSON rendering
+  ui/                bubbletea UI (progress + styled result)
+  progress/          byte-counting reader + TTY detection
   deps/              external-tool detection + install hints
 rules/               starter semgrep + yara rules
 ```

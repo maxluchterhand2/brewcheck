@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"brewcheck/internal/progress"
 	"brewcheck/internal/report"
 	"brewcheck/internal/scan/capa"
 	"brewcheck/internal/scan/clamav"
@@ -43,10 +42,11 @@ type Input struct {
 	GitHubToken   string // optional, for higher API rate limits
 	AllowNewRepos bool   // when true, a sub-month-old repo is not flagged SUSPICIOUS
 
-	ShowProgress  bool   // render a bar for the cloud upload + spinner for analysis
-	OnUploadStart func() // called once, just before the opt-in upload begins
-	// (used by the CLI to clear any active scanning spinner so the upload bar
-	// can own the terminal line)
+	// Upload progress hooks (used by the CLI to render the opt-in cloud upload).
+	// Both may be nil (no rendering). OnUploadStart fires once just before the
+	// upload begins; OnUploadProgress reports bytes sent as the body streams out.
+	OnUploadStart    func()
+	OnUploadProgress func(done, total int64)
 
 	Logf func(format string, a ...any)
 }
@@ -147,31 +147,18 @@ func maybeCloud(ctx context.Context, in Input, vtKnown bool) report.LayerResult 
 		return skipped(name, "file exceeds --max-upload-size; never uploaded")
 	}
 
-	// We're committed to uploading: let the CLI clear any scanning spinner so
-	// the upload bar and analysis spinner can own the terminal line.
+	// We're committed to uploading: tell the UI so it can show an upload bar.
 	if in.OnUploadStart != nil {
 		in.OnUploadStart()
 	}
 	in.log("uploading artifact to VirusTotal (opt-in) — this publishes the file")
 
 	client := vt.New(in.VTKey)
-
-	// Percentage bar while the request body streams out.
-	bar := progress.NewBar(in.ShowProgress, "uploading to VirusTotal")
-	var onProgress func(done, total int64)
-	if bar != nil {
-		onProgress = bar.Update
-	}
-	id, res, ok := client.UploadFile(ctx, in.ArtifactPath, onProgress)
-	bar.Finish()
+	id, res, ok := client.UploadFile(ctx, in.ArtifactPath, in.OnUploadProgress)
 	if !ok {
 		return res
 	}
-
-	// Analysis time is indeterminate — show a spinner while we poll.
-	sp := progress.NewSpinner(in.ShowProgress, "waiting for VirusTotal analysis")
 	res, _ = client.PollAnalysis(ctx, id)
-	sp.Stop()
 	return res
 }
 
