@@ -11,6 +11,7 @@ import (
 
 // macOS major version -> Homebrew codename. Extend as new releases ship.
 var macCodenames = map[int]string{
+	27: "golden_gate",
 	26: "tahoe",
 	15: "sequoia",
 	14: "sonoma",
@@ -22,8 +23,6 @@ var macCodenames = map[int]string{
 // HostPlatform returns the Homebrew bottle key for the current host, e.g.
 // "arm64_tahoe" or "sonoma". It shells out to `sw_vers` only to read the OS
 // version (a read-only query), never to brew.
-//
-// v0.1 only checks the current platform's bottle (documented in README).
 func HostPlatform() (string, error) {
 	if runtime.GOOS != "darwin" {
 		// Linux bottle keys are arch_linux style.

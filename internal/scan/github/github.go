@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"brewcheck/internal/report"
+	"brewcheck/internal/timeouts"
 )
 
 // apiBase is a var (not const) so tests can point it at a mock server.
@@ -73,9 +74,9 @@ func Analyze(ctx context.Context, opt Options) report.LayerResult {
 		return res
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 25*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, timeouts.GitHub)
 	defer cancel()
-	client := &http.Client{Timeout: 25 * time.Second}
+	client := &http.Client{Timeout: timeouts.GitHub}
 
 	m, err := fetchMetrics(ctx, client, repo, token)
 	if err != nil {
@@ -279,6 +280,10 @@ func fetchMetrics(ctx context.Context, c *http.Client, repo, token string) (Metr
 
 // contributorCount derives the contributor count from the Link header of a
 // per_page=1 listing (the standard cheap trick). Returns ok=false if it can't.
+//
+// anon=1 includes anonymous (email-keyed) contributors, so for old repos with
+// many one-off committers this is an *upper bound* on real contributors — fine
+// for a lenient score, where more contributors only ever helps.
 func contributorCount(ctx context.Context, c *http.Client, token, repo string) (int, bool) {
 	url := apiBase + "/repos/" + repo + "/contributors?per_page=1&anon=1"
 	req, err := newReq(ctx, token, url)

@@ -11,10 +11,18 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
-	"time"
 
 	"brewcheck/internal/deps"
 	"brewcheck/internal/report"
+	"brewcheck/internal/timeouts"
+)
+
+// mode is which ClamAV client is in use.
+type mode string
+
+const (
+	modeDaemon mode = "clamdscan" // talks to the clamd daemon
+	modeScan   mode = "clamscan"  // standalone scanner
 )
 
 // Scan scans path with ClamAV.
@@ -34,13 +42,13 @@ func Scan(ctx context.Context, path string) report.LayerResult {
 		res.Hint = hint
 		return res
 	}
-	bin, mode := sel.bin, sel.mode
+	bin, m := sel.bin, sel.mode
 
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, timeouts.ClamAV)
 	defer cancel()
 
 	args := []string{"--no-summary"}
-	if mode == "clamdscan" {
+	if m == modeDaemon {
 		args = append(args, "--fdpass") // let the daemon read via passed fd
 	}
 	args = append(args, path)
@@ -64,7 +72,7 @@ func Scan(ctx context.Context, path string) report.LayerResult {
 	res.Status = report.StatusRan
 	switch exitCode {
 	case 0:
-		res.Summary = fmt.Sprintf("no signatures matched (%s)", mode)
+		res.Summary = fmt.Sprintf("no signatures matched (%s)", m)
 	case 1:
 		for _, sig := range parseHits(stdout.String()) {
 			res.AddFinding(report.SeverityMalicious, "ClamAV signature match: "+sig, "", path)
@@ -72,17 +80,17 @@ func Scan(ctx context.Context, path string) report.LayerResult {
 		if len(res.Findings) == 0 {
 			res.AddFinding(report.SeverityMalicious, "ClamAV reported an infection", "", path)
 		}
-		res.Summary = fmt.Sprintf("infection detected (%s)", mode)
+		res.Summary = fmt.Sprintf("infection detected (%s)", m)
 	default:
 		res.Status = report.StatusError
-		res.Err = fmt.Sprintf("%s error (exit %d): %s", mode, exitCode, strings.TrimSpace(stderr.String()))
+		res.Err = fmt.Sprintf("%s error (exit %d): %s", m, exitCode, strings.TrimSpace(stderr.String()))
 	}
 	return res
 }
 
 type scanner struct {
 	bin  string
-	mode string // "clamdscan" | "clamscan"
+	mode mode
 }
 
 // chooseScanner decides which ClamAV client to run. daemonUp is only consulted
@@ -91,9 +99,9 @@ type scanner struct {
 func chooseScanner(clamdscan string, hasClamd bool, clamscan string, hasClamscan bool, daemonUp func() bool) (s scanner, hint string, ok bool) {
 	switch {
 	case hasClamd && daemonUp():
-		return scanner{clamdscan, "clamdscan"}, "", true
+		return scanner{clamdscan, modeDaemon}, "", true
 	case hasClamscan:
-		return scanner{clamscan, "clamscan"}, "", true
+		return scanner{clamscan, modeScan}, "", true
 	case hasClamd:
 		// clamdscan exists but the daemon is down and there's no clamscan fallback.
 		return scanner{}, "clamdscan is installed but clamd is not running, and clamscan is unavailable; start clamd (e.g. `brew services start clamav`) or install clamscan", false
@@ -108,7 +116,7 @@ func chooseScanner(clamdscan string, hasClamd bool, clamscan string, hasClamscan
 // attempt keeps it fast, and any non-zero exit (daemon down, or an old
 // clamdscan without --ping) means "treat the daemon as unavailable".
 func daemonRunning(ctx context.Context, clamdscan string) bool {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, timeouts.ClamPing)
 	defer cancel()
 	return exec.CommandContext(ctx, clamdscan, "--ping=1").Run() == nil
 }

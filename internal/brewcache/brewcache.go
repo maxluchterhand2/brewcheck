@@ -13,7 +13,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
+
+	"brewcheck/internal/report"
+	"brewcheck/internal/timeouts"
 )
 
 // Available reports whether the brew binary is on PATH.
@@ -27,11 +29,9 @@ func Available() bool {
 // metadata for third-party taps, which the formulae.brew.sh API does not serve.
 // brew may auto-tap (git-clone) an untapped repo to answer; that fetches only
 // the formula definitions, never the artifact.
+// Cool kids check Available() first.
 func Info(ctx context.Context, ref string) ([]byte, error) {
-	if !Available() {
-		return nil, fmt.Errorf("brew is required to resolve tap %q but is not on PATH", ref)
-	}
-	ctx, cancel := context.WithTimeout(ctx, 120*time.Second) // cloning a tap can be slow
+	ctx, cancel := context.WithTimeout(ctx, timeouts.BrewInfo)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "brew", "info", "--json=v2", ref)
@@ -51,13 +51,13 @@ func Info(ctx context.Context, ref string) ([]byte, error) {
 // CachePath returns the absolute path brew would use for the given artifact.
 // kind must be "formula" or "cask". When buildFromSource is true, the source
 // tarball cache path is requested (brew caches source downloads separately from
-// bottles). Callers should check Available() first.
-func CachePath(ctx context.Context, name, kind string, buildFromSource bool) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+// bottles). Cool kids check Available() first.
+func CachePath(ctx context.Context, name string, kind report.Kind, buildFromSource bool) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeouts.BrewCache)
 	defer cancel()
 
 	args := []string{"--cache"}
-	if kind == "cask" {
+	if kind == report.KindCask {
 		args = append(args, "--cask")
 	}
 	if buildFromSource {
@@ -115,7 +115,7 @@ func Place(src, dest string) error {
 		return fmt.Errorf("syncing cache file: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
-		return err
+		return fmt.Errorf("closing tmp file: %w", err)
 	}
 	if err := os.Rename(tmpName, dest); err != nil {
 		return fmt.Errorf("finalizing cache file: %w", err)

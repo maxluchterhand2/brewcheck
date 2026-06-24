@@ -41,9 +41,9 @@ func TestSeverityFor(t *testing.T) {
 		"medium":     report.SeveritySuspicious,
 		"high":       report.SeverityMalicious,
 		"critical":   report.SeverityMalicious,
-		"":           report.SeverityMalicious, // missing -> definitive
-		"weird":      report.SeverityMalicious, // unknown -> definitive
-		"  High ":    report.SeverityMalicious, // trimmed + case-insensitive
+		"":           report.SeveritySuspicious, // missing -> default DOWN, never destructive
+		"weird":      report.SeveritySuspicious, // unknown -> default DOWN
+		"  High ":    report.SeverityMalicious,  // trimmed + case-insensitive
 	}
 	for in, want := range cases {
 		if got := severityFor(in); got != want {

@@ -22,13 +22,14 @@ import (
 // Input carries everything the pipeline needs about a verified artifact.
 type Input struct {
 	Name           string
-	Kind           string // "formula" | "cask"
+	Kind           report.Kind
 	ArtifactPath   string
 	SHA256         string
 	DefinitionJSON []byte
-	ScriptPaths    []string // extracted install scripts
+	ScriptPaths    []string // extracted install scripts (for static analysis)
+	SemgrepTargets []string // scripts + extracted root (what Semgrep scans)
 	ScanTargets    []string // artifact + extracted dirs for clamav/yara
-	BinaryForCapa  string   // a single binary path, or ""
+	BinaryForCapa  string   // a representative Mach-O path, or ""
 
 	SemgrepRules string
 	YaraRules    string
@@ -61,9 +62,11 @@ func (in *Input) log(format string, a ...any) {
 func Run(ctx context.Context, in Input) []report.LayerResult {
 	var layers []report.LayerResult
 
+	// One VirusTotal client for the whole run (hash lookup + optional upload).
+	vtClient := vt.New(in.VTKey)
+
 	// Layer 1: VirusTotal hash reputation (zero upload, may short-circuit).
 	in.log("layer: VirusTotal hash reputation")
-	vtClient := vt.New(in.VTKey)
 	vtRes, definitelyBad, vtKnown := vtClient.LookupHash(ctx, in.SHA256)
 	layers = append(layers, vtRes)
 
@@ -85,54 +88,54 @@ func Run(ctx context.Context, in Input) []report.LayerResult {
 	layers = append(layers, local...)
 
 	// Layer 4: opt-in cloud upload, last resort.
-	layers = append(layers, maybeCloud(ctx, in, vtKnown))
+	layers = append(layers, maybeCloud(ctx, in, vtClient, vtKnown))
 	return layers
 }
 
 func runLocalParallel(ctx context.Context, in Input) []report.LayerResult {
-	type job struct {
-		idx int
-		run func() report.LayerResult
-	}
-	jobs := []job{
-		{0, func() report.LayerResult {
+	return parallel(
+		func() report.LayerResult {
 			return static.Analyze(in.Kind, in.Name, in.DefinitionJSON, in.ScriptPaths)
-		}},
-		{1, func() report.LayerResult {
-			return semgrep.Scan(ctx, in.SemgrepRules, append([]string{}, in.ScriptPaths...))
-		}},
-		{2, func() report.LayerResult { return clamav.Scan(ctx, in.ArtifactPath) }},
-		{3, func() report.LayerResult { return yara.Scan(ctx, in.YaraRules, in.ScanTargets) }},
-		{4, func() report.LayerResult {
+		},
+		func() report.LayerResult {
+			return semgrep.Scan(ctx, in.SemgrepRules, append([]string{}, in.SemgrepTargets...))
+		},
+		func() report.LayerResult { return clamav.Scan(ctx, in.ArtifactPath) },
+		func() report.LayerResult { return yara.Scan(ctx, in.YaraRules, in.ScanTargets) },
+		func() report.LayerResult {
 			if in.BinaryForCapa == "" {
 				return skipped("capa (capabilities, informational)", "no single binary identified to analyze")
 			}
 			return capa.Analyze(ctx, in.BinaryForCapa)
-		}},
-		{5, func() report.LayerResult {
+		},
+		func() report.LayerResult {
 			return github.Analyze(ctx, github.Options{
 				Repo:          in.GitHubRepo,
 				Token:         in.GitHubToken,
 				AllowNewRepos: in.AllowNewRepos,
 				Now:           time.Now(),
 			})
-		}},
-	}
+		},
+	)
+}
 
-	results := make([]report.LayerResult, len(jobs))
+// parallel runs each layer function concurrently and returns their results in
+// the same order they were passed.
+func parallel(fns ...func() report.LayerResult) []report.LayerResult {
+	results := make([]report.LayerResult, len(fns))
 	var wg sync.WaitGroup
-	for _, j := range jobs {
+	for i, fn := range fns {
 		wg.Add(1)
-		go func(j job) {
+		go func(i int, fn func() report.LayerResult) {
 			defer wg.Done()
-			results[j.idx] = j.run()
-		}(j)
+			results[i] = fn()
+		}(i, fn)
 	}
 	wg.Wait()
 	return results
 }
 
-func maybeCloud(ctx context.Context, in Input, vtKnown bool) report.LayerResult {
+func maybeCloud(ctx context.Context, in Input, client *vt.Client, vtKnown bool) report.LayerResult {
 	name := "VirusTotal upload (opt-in)"
 	if !in.AllowCloud {
 		return skipped(name, "not enabled (pass --cloud to allow uploading the file)")
@@ -153,7 +156,6 @@ func maybeCloud(ctx context.Context, in Input, vtKnown bool) report.LayerResult 
 	}
 	in.log("uploading artifact to VirusTotal (opt-in) — this publishes the file")
 
-	client := vt.New(in.VTKey)
 	id, res, ok := client.UploadFile(ctx, in.ArtifactPath, in.OnUploadProgress)
 	if !ok {
 		return res

@@ -1,9 +1,11 @@
 package extract
 
 import (
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -48,14 +50,54 @@ func FindScripts(root string) []string {
 	return found
 }
 
-// ReadCapped reads up to max bytes of a file (for static scanning).
+// machoMagics are the 4-byte magic numbers that start a Mach-O (thin or fat)
+// binary, in both byte orders.
+var machoMagics = [][4]byte{
+	{0xFE, 0xED, 0xFA, 0xCE}, {0xCE, 0xFA, 0xED, 0xFE}, // 32-bit
+	{0xFE, 0xED, 0xFA, 0xCF}, {0xCF, 0xFA, 0xED, 0xFE}, // 64-bit
+	{0xCA, 0xFE, 0xBA, 0xBE}, {0xBE, 0xBA, 0xFE, 0xCA}, // universal (fat)
+}
+
+// FindMachO walks an extracted tree and returns the path of the first Mach-O
+// binary it finds (by magic number), or "" if none.
+func FindMachO(root string) string {
+	var found string
+	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		info, e := d.Info()
+		if e != nil || !info.Mode().IsRegular() || info.Size() < 4 {
+			return nil
+		}
+		f, e := os.Open(path)
+		if e != nil {
+			return nil
+		}
+		var magic [4]byte
+		_, e = io.ReadFull(f, magic[:])
+		f.Close()
+		if e != nil {
+			return nil
+		}
+		if slices.Contains(machoMagics, magic) {
+			found = path
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	return found
+}
+
+// ReadCapped reads up to max bytes of a file (for static scanning). It uses
+// io.ReadAll over a LimitReader so it reads the *whole* capped region — a
+// single Read may return a short chunk without EOF, which would silently scan
+// only the start of a script and miss patterns later in the file.
 func ReadCapped(path string, max int64) ([]byte, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
-	buf := make([]byte, max)
-	n, _ := f.Read(buf)
-	return buf[:n], nil
+	return io.ReadAll(io.LimitReader(f, max))
 }

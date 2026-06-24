@@ -10,7 +10,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
+
+	"brewcheck/internal/timeouts"
 )
 
 const (
@@ -28,7 +29,7 @@ type Client struct {
 
 // New returns a Client with a sane default timeout.
 func New() *Client {
-	return &Client{HTTP: &http.Client{Timeout: 30 * time.Second}}
+	return &Client{HTTP: &http.Client{Timeout: timeouts.HomebrewAPI}}
 }
 
 // Formula holds the subset of formula metadata brewcheck needs, plus the raw
@@ -203,7 +204,7 @@ func (c *Client) get(ctx context.Context, url string) ([]byte, error) {
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "brewcheck/0.1")
+	req.Header.Set("User-Agent", "brewcheck/0.2")
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("requesting %s: %w", url, err)

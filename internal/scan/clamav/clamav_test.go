@@ -12,13 +12,13 @@ func TestChooseScanner(t *testing.T) {
 		hasClamd    bool
 		hasClamscan bool
 		daemonUp    func() bool
-		wantMode    string // "" => skipped
+		wantMode    mode // "" => skipped
 		wantOK      bool
 	}{
-		{"daemon up -> clamdscan", true, true, up, "clamdscan", true},
-		{"daemon down, clamscan present -> fall back", true, true, down, "clamscan", true},
+		{"daemon up -> clamdscan", true, true, up, modeDaemon, true},
+		{"daemon down, clamscan present -> fall back", true, true, down, modeScan, true},
 		{"daemon down, no clamscan -> skip with hint", true, false, down, "", false},
-		{"no clamd, clamscan present -> clamscan (no ping)", false, true, mustNotCall(t), "clamscan", true},
+		{"no clamd, clamscan present -> clamscan (no ping)", false, true, mustNotCall(t), modeScan, true},
 		{"nothing installed -> skip", false, false, mustNotCall(t), "", false},
 	}
 	for _, tt := range tests {

@@ -13,10 +13,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
-	"time"
 
 	"brewcheck/internal/deps"
+	"brewcheck/internal/timeouts"
 )
 
 // Limits bound extraction to guard against zip bombs.
@@ -25,8 +26,8 @@ type Limits struct {
 	MaxBytes int64
 }
 
-// DefaultLimits are conservative defaults.
-var DefaultLimits = Limits{MaxFiles: 20000, MaxBytes: 2 << 30} // 2 GiB
+// DefaultUnzipLimits are conservative defaults.
+var DefaultUnzipLimits = Limits{MaxFiles: 20000, MaxBytes: 2 << 30} // 2 GiB
 
 // ErrUnsupported indicates no extractor is available for the artifact.
 var ErrUnsupported = fmt.Errorf("no available extractor for artifact")
@@ -45,26 +46,60 @@ func Artifact(ctx context.Context, src, scratchParent string) (string, error) {
 	case strings.HasSuffix(lower, ".pkg") || strings.HasSuffix(lower, ".mpkg"):
 		return dest, ExpandPkg(ctx, src, filepath.Join(dest, "pkg"))
 	case strings.HasSuffix(lower, ".zip"):
-		return dest, SafeUnzip(src, dest, DefaultLimits)
+		return dest, SafeUnzip(src, dest, DefaultUnzipLimits)
 	case strings.HasSuffix(lower, ".dmg"):
 		// Never mount: extract with 7z so nothing is attached.
-		return dest, Extract7z(ctx, src, dest)
+		if err := Extract7z(ctx, src, dest); err != nil {
+			return dest, err
+		}
+		unwrapTars(ctx, dest)
+		return dest, nil
 	default:
 		// tar.gz bottles and everything else: try 7z if present.
 		if _, ok := deps.Find("7z", "7zz", "7za"); ok {
-			return dest, Extract7z(ctx, src, dest)
+			if err := Extract7z(ctx, src, dest); err != nil {
+				return dest, err
+			}
+			unwrapTars(ctx, dest)
+			return dest, nil
 		}
 		return dest, ErrUnsupported
 	}
 }
 
+// unwrapTars does a second extraction pass for the common case where 7z unpacks
+// a compressed tarball (.tar.gz/.tar.xz/…) only one step, leaving a bare .tar.
+// Extracting that .tar yields the real file tree, which the scanners and the
+// capa Mach-O finder need. Best-effort: errors are ignored (the .tar is still
+// scannable as-is). Only top-level .tar files are unwrapped (one level deep).
+func unwrapTars(ctx context.Context, dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(strings.ToLower(e.Name()), ".tar") {
+			continue
+		}
+		tarPath := filepath.Join(dir, e.Name())
+		if err := Extract7z(ctx, tarPath, dir); err == nil {
+			_ = os.Remove(tarPath)
+		}
+	}
+}
+
 // ExpandPkg runs `pkgutil --expand` (which never executes the installer).
-// dest must not already exist (pkgutil requirement).
+// dest must not already exist (pkgutil requirement). pkgutil is macOS-only, so
+// .pkg/.dmg extraction is unavailable on Linux (a clear error rather than a
+// silent miss).
 func ExpandPkg(ctx context.Context, pkg, dest string) error {
+	if runtime.GOOS != "darwin" {
+		return fmt.Errorf("pkgutil is macOS-only; cannot expand %s on %s", filepath.Base(pkg), runtime.GOOS)
+	}
 	if _, err := exec.LookPath("pkgutil"); err != nil {
 		return fmt.Errorf("pkgutil not available: %w", err)
 	}
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, timeouts.Pkgutil)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "pkgutil", "--expand", pkg, dest)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -79,7 +114,7 @@ func Extract7z(ctx context.Context, src, dest string) error {
 	if !ok {
 		return fmt.Errorf("7z not available: %w", ErrUnsupported)
 	}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, timeouts.SevenZip)
 	defer cancel()
 	// -y assume yes, -o output dir (no space), x preserves paths.
 	cmd := exec.CommandContext(ctx, bin, "x", "-y", "-o"+dest, src)

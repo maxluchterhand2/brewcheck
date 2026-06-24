@@ -7,10 +7,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
-	"time"
 
 	"brewcheck/internal/deps"
 	"brewcheck/internal/report"
+	"brewcheck/internal/timeouts"
 )
 
 // Scan runs semgrep over targets with the given rules dir. Missing semgrep is
@@ -29,7 +29,7 @@ func Scan(ctx context.Context, rulesDir string, targets []string) report.LayerRe
 		return res
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, timeouts.Semgrep)
 	defer cancel()
 
 	args := []string{"--config", rulesDir, "--json", "--quiet", "--no-git-ignore"}

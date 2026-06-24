@@ -12,10 +12,10 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
-	"time"
 
 	"brewcheck/internal/deps"
 	"brewcheck/internal/report"
+	"brewcheck/internal/timeouts"
 )
 
 // Scan recursively scans targets with the compiled/loose rules in rulesDir.
@@ -33,7 +33,7 @@ func Scan(ctx context.Context, rulesFile string, targets []string) report.LayerR
 		return res
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, timeouts.YARA)
 	defer cancel()
 
 	res.Status = report.StatusRan
@@ -73,18 +73,18 @@ func Scan(ctx context.Context, rulesFile string, targets []string) report.LayerR
 //	medium                   -> suspicious (don't cache by default)
 //	low / hesitant / aggressive -> hesitant (cache, but warn — these are the
 //	                             intentionally pedantic, false-positive-prone rules)
-//	missing / unknown        -> malicious (a YARA hit with no declared severity
-//	                             is treated as definitive, per the original v0.1 contract)
+//	missing / unknown        -> suspicious (a rule author who forgets a severity
+//	                             meta must NOT trigger a destructive MALICIOUS
+//	                             verdict; malicious is opt-in via high/critical)
 func severityFor(sevMeta string) report.Severity {
 	switch strings.ToLower(strings.TrimSpace(sevMeta)) {
 	case "low", "hesitant", "aggressive", "noisy":
 		return report.SeverityHesitant
-	case "medium", "moderate":
-		return report.SeveritySuspicious
 	case "high", "critical":
 		return report.SeverityMalicious
 	default:
-		return report.SeverityMalicious
+		// medium / moderate / missing / unknown — default DOWN to suspicious.
+		return report.SeveritySuspicious
 	}
 }
 

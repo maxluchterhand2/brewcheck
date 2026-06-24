@@ -59,7 +59,7 @@ func makeZip(t *testing.T, entries map[string]string) string {
 func TestSafeUnzipRejectsZipSlip(t *testing.T) {
 	src := makeZip(t, map[string]string{"../escape.txt": "pwned"})
 	dest := t.TempDir()
-	err := SafeUnzip(src, dest, DefaultLimits)
+	err := SafeUnzip(src, dest, DefaultUnzipLimits)
 	if err == nil {
 		t.Fatal("expected zip-slip to be rejected")
 	}
@@ -75,7 +75,7 @@ func TestSafeUnzipRejectsZipSlip(t *testing.T) {
 func TestSafeUnzipExtractsNormal(t *testing.T) {
 	src := makeZip(t, map[string]string{"good/file.txt": "hello", "good/sub/x.sh": "echo hi"})
 	dest := t.TempDir()
-	if err := SafeUnzip(src, dest, DefaultLimits); err != nil {
+	if err := SafeUnzip(src, dest, DefaultUnzipLimits); err != nil {
 		t.Fatalf("SafeUnzip: %v", err)
 	}
 	data, err := os.ReadFile(filepath.Join(dest, "good", "file.txt"))

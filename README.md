@@ -52,7 +52,7 @@ brewcheck --tap user/repo <name>   # check a formula/cask from a third-party tap
 | `--formula <name>` / `--cask <name>` | — | explicit type (mutually exclusive) |
 | `--tap <user/repo>` | — | resolve `<name>` from a third-party tap instead of the core API (requires brew) |
 | `--build-from-source` / `-s` | `false` | scan the upstream source tarball instead of a bottle (auto-used for source-only formulae) |
-| `--cache` / `--no-cache` | `true` | place verified bytes in brew's cache on a clean verdict |
+| `--no-cache` | `false` | do not place verified bytes in brew's cache on a clean verdict (caching is on by default) |
 | `--keep` | `false` | keep the quarantine dir (debugging) |
 | `--cloud` | `false` | allow opt-in VirusTotal **file upload** when file hashes are unknown to VirusTotal |
 | `--max-upload-size <bytes>` | `52428800` (50 MiB) | never cloud-upload above this, even with `--cloud` |

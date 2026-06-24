@@ -11,6 +11,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+
+	"brewcheck/internal/progress"
 )
 
 // Fetcher opens a stream for an artifact. Implementations live in internal/oci
@@ -99,9 +101,7 @@ func (q *Quarantine) Fetch(ctx context.Context, f Fetcher, maxSize int64, onProg
 		// +1 so we can detect overflow when Content-Length lied or was absent.
 		reader = io.LimitReader(reader, maxSize+1)
 	}
-	if onProgress != nil {
-		reader = &progressReader{r: reader, total: size, cb: onProgress}
-	}
+	reader = progress.NewReader(reader, size, onProgress)
 
 	n, err := io.Copy(out, reader)
 	if err != nil {
@@ -116,24 +116,6 @@ func (q *Quarantine) Fetch(ctx context.Context, f Fetcher, maxSize int64, onProg
 		return nil, fmt.Errorf("syncing artifact: %w", err)
 	}
 	return &Result{Path: dst, SHA256: hex.EncodeToString(h.Sum(nil)), Size: n}, nil
-}
-
-// progressReader reports cumulative bytes read to a callback. The callback is
-// expected to throttle its own rendering (see internal/progress).
-type progressReader struct {
-	r     io.Reader
-	total int64
-	done  int64
-	cb    func(done, total int64)
-}
-
-func (p *progressReader) Read(b []byte) (int, error) {
-	n, err := p.r.Read(b)
-	if n > 0 {
-		p.done += int64(n)
-		p.cb(p.done, p.total)
-	}
-	return n, err
 }
 
 func sanitizeName(name string) string {

@@ -1,6 +1,6 @@
 // Package static performs the local, zero-upload static analysis of the
-// definition JSON and any extracted install scripts. Per the spec this is the
-// highest-value layer: it surfaces what an install would actually do
+// definition's executable parts and any extracted install scripts. Per the spec
+// this is the highest-value layer: it surfaces what an install would actually do
 // (postinstall/uninstall/zap stanzas, pkg scripts) and flags risky patterns
 // (curl|bash, base64|sh, LaunchAgents, reverse shells, obfuscation).
 //
@@ -8,6 +8,11 @@
 // dependency. Patterns are intentionally conservative about severity: most are
 // "suspicious" (worth a human look), reserving "malicious" for the scanners
 // with authoritative signal (VT/ClamAV/YARA).
+//
+// Patterns are deliberately applied ONLY to fields that can execute (cask
+// uninstall/zap/installer stanzas and extracted scripts), never to the whole
+// metadata blob — scanning descriptions/caveats produced near-zero-signal
+// findings (e.g. any URL or the word "sudo" in a description).
 package static
 
 import (
@@ -25,7 +30,7 @@ type pattern struct {
 	title string
 }
 
-// patterns are applied to both the raw definition JSON and extracted scripts.
+// patterns are applied to executable script/stanza content only.
 var patterns = []pattern{
 	{regexp.MustCompile(`(?i)curl[^|\n]*\|\s*(sh|bash|zsh)\b`), report.SeveritySuspicious, "pipes curl output directly into a shell"},
 	{regexp.MustCompile(`(?i)wget[^|\n]*\|\s*(sh|bash|zsh)\b`), report.SeveritySuspicious, "pipes wget output directly into a shell"},
@@ -41,23 +46,21 @@ var patterns = []pattern{
 	{regexp.MustCompile(`(?i)python[0-9.]*\s+-c\s`), report.SeveritySuspicious, "runs an inline python one-liner"},
 	{regexp.MustCompile(`(?i)\bperl\b\s+-e\s`), report.SeveritySuspicious, "runs an inline perl one-liner"},
 	{regexp.MustCompile(`(?i)\bxxd\b|\bopenssl\s+enc\b`), report.SeverityInfo, "encodes/decodes data (possible obfuscation)"},
-	{regexp.MustCompile(`https?://[^\s"']+`), report.SeverityInfo, "makes a network reference"},
 }
 
-// Analyze runs static analysis over the definition JSON and any extracted
-// script paths. kind is "formula" or "cask".
-func Analyze(kind, name string, defJSON []byte, scriptPaths []string) report.LayerResult {
+// Analyze runs static analysis over the definition's executable stanzas and any
+// extracted script paths.
+func Analyze(kind report.Kind, name string, defJSON []byte, scriptPaths []string) report.LayerResult {
 	res := report.LayerResult{Name: "static analysis (definition + scripts)", Status: report.StatusRan}
 
-	// 1) Surface what cask install/uninstall stanzas do.
-	if kind == "cask" {
+	// Cask install/uninstall stanzas: surface them AND pattern-scan the ones
+	// that can execute commands.
+	if kind == report.KindCask {
 		surfaceCaskArtifacts(defJSON, &res)
 	}
 
-	// 2) Pattern-scan the raw definition JSON.
-	scanBytes(defJSON, "definition JSON", &res)
-
-	// 3) Pattern-scan extracted install scripts (the real installer surface).
+	// Extracted install scripts (the real installer surface — pkg pre/postinstall,
+	// scripts shipped in a source tarball, etc.).
 	for _, sp := range scriptPaths {
 		data, err := extract.ReadCapped(sp, 1<<20)
 		if err != nil {
@@ -85,7 +88,8 @@ func scanBytes(data []byte, loc string, res *report.LayerResult) {
 
 // surfaceCaskArtifacts decodes the cask artifacts array and surfaces
 // uninstall/zap stanzas, pkg/installer/binary artifacts, and any embedded
-// scripts so the user sees exactly what the cask manipulates.
+// scripts so the user sees exactly what the cask manipulates. The executable
+// stanzas (uninstall/zap/installer) are additionally pattern-scanned.
 func surfaceCaskArtifacts(defJSON []byte, res *report.LayerResult) {
 	var cask struct {
 		Artifacts []map[string]json.RawMessage `json:"artifacts"`
@@ -98,14 +102,15 @@ func surfaceCaskArtifacts(defJSON []byte, res *report.LayerResult) {
 			switch key {
 			case "uninstall", "zap":
 				res.AddFinding(report.SeverityInfo, "cask "+key+" stanza", summarizeStanza(raw), "artifacts."+key)
-				// uninstall/zap can carry a "script" that runs a command.
 				if hasScriptStanza(raw) {
 					res.AddFinding(report.SeveritySuspicious, "cask "+key+" runs a script/launchctl/pkgutil action", "", "artifacts."+key)
 				}
+				scanBytes(raw, "artifacts."+key, res) // the stanza can carry shell commands
 			case "pkg":
 				res.AddFinding(report.SeverityInfo, "cask installs a .pkg (scripts expanded & scanned separately)", "", "artifacts.pkg")
 			case "installer":
 				res.AddFinding(report.SeveritySuspicious, "cask uses an installer stanza (may run scripts/manual steps)", string(truncate(raw, 200)), "artifacts.installer")
+				scanBytes(raw, "artifacts.installer", res)
 			case "binary":
 				res.AddFinding(report.SeverityInfo, "cask symlinks a binary onto PATH", "", "artifacts.binary")
 			}

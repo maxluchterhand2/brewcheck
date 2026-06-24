@@ -40,19 +40,6 @@ func sevColor(s report.Severity) lipgloss.Color {
 	}
 }
 
-func sevMarker(s report.Severity) string {
-	switch s {
-	case report.SeverityMalicious:
-		return "‼"
-	case report.SeveritySuspicious:
-		return "⚠"
-	case report.SeverityHesitant:
-		return "⚑"
-	default:
-		return "•"
-	}
-}
-
 // verdictColor / verdictBadge style the headline verdict.
 func verdictColor(v report.Verdict) lipgloss.Color {
 	switch v {
@@ -78,22 +65,14 @@ func verdictBadge(v report.Verdict) string {
 		Render(string(v))
 }
 
+// verdictMessage is the one-line verdict summary. It reuses the shared
+// report vocabulary so the plain and TUI renderers can't drift, except an
+// ERROR shows the concrete error text.
 func verdictMessage(r *report.Report) string {
-	switch r.Verdict {
-	case report.VerdictClean:
-		return "No known-malicious indicators found."
-	case report.VerdictHesitant:
-		return "Cached, but an aggressive heuristic flagged something — review the ⚑ items."
-	case report.VerdictSuspicious:
-		return "Suspicious patterns or an unverifiable hash were found — review above."
-	case report.VerdictMalicious:
-		return "Known-malicious indicators found."
-	default:
-		if r.Error != "" {
-			return r.Error
-		}
-		return "Could not complete the check."
+	if r.Verdict == report.VerdictError && r.Error != "" {
+		return r.Error
 	}
+	return r.Verdict.Headline()
 }
 
 // resultView renders the final styled report.
@@ -110,7 +89,7 @@ func (m Model) resultView() string {
 	// Header.
 	header := titleStyle.Render("🍺 brewcheck")
 	if r.Name != "" {
-		kind := r.Kind
+		kind := string(r.Kind)
 		if r.BuildFromSource {
 			kind += ", source build"
 		}
@@ -124,11 +103,10 @@ func (m Model) resultView() string {
 	nl(header)
 	nl("")
 
-	// Verdict headline.
+	// Verdict headline + shared caveat lines.
 	nl("  " + verdictBadge(r.Verdict) + "  " + lipgloss.NewStyle().Foreground(verdictColor(r.Verdict)).Render(verdictMessage(r)))
-	if r.Verdict == report.VerdictClean {
-		nl("  " + dimStyle.Render("(detects known malware & suspicious patterns; not a defense against a novel,"))
-		nl("  " + dimStyle.Render(" targeted supply-chain attack — the install scripts above are the real signal)"))
+	for _, d := range r.Verdict.Detail() {
+		nl("  " + dimStyle.Render(d))
 	}
 	nl("")
 
@@ -150,21 +128,21 @@ func (m Model) resultView() string {
 
 	// Layers.
 	nl("  " + headingStyle.Render("Inspection layers"))
-	ran := 0
 	for _, l := range r.Layers {
-		if l.Status == report.StatusRan {
-			ran++
-		}
 		nl("  " + layerLine(l, width))
 		if l.Credibility != nil {
 			nl("       " + credibilityLine(l.Credibility, width))
 		}
 		for _, f := range l.Findings {
 			c := lipgloss.NewStyle().Foreground(sevColor(f.Severity))
-			nl("       " + c.Render(sevMarker(f.Severity)+" "+f.Title))
+			nl("       " + c.Render(f.Severity.Glyph()+" "+f.Title))
 		}
 	}
-	nl("  " + dimStyle.Render(fmt.Sprintf("%d of %d layers ran", ran, len(r.Layers))))
+	count := fmt.Sprintf("%d of %d layers ran", report.CountRan(r.Layers), len(r.Layers))
+	if r.Degraded > 0 {
+		count += fmt.Sprintf("  (degraded — %d errored)", r.Degraded)
+	}
+	nl("  " + dimStyle.Render(count))
 	nl("")
 
 	// Action.
@@ -210,12 +188,9 @@ func credibilityLine(c *report.Credibility, width int) string {
 	case c.Score < 7:
 		col = lipgloss.Color("220")
 	}
-	filled := c.Score
-	if filled > c.Max {
-		filled = c.Max
-	}
+	filled, empty := report.CredibilityFill(c.Score, c.Max)
 	bar := lipgloss.NewStyle().Foreground(col).Render(strings.Repeat("█", filled)) +
-		dimStyle.Render(strings.Repeat("░", c.Max-filled))
+		dimStyle.Render(strings.Repeat("░", empty))
 	line := fmt.Sprintf("credibility [%s] %d/%d", bar, c.Score, c.Max)
 	if len(c.Signals) > 0 {
 		line += dimStyle.Render("  " + strings.Join(c.Signals, " · "))
@@ -223,25 +198,22 @@ func credibilityLine(c *report.Credibility, width int) string {
 	return trunc(line, width-7)
 }
 
+// actionText colors the (shared) action description by its typed Action. The
+// wording itself lives once in report.Action.Describe.
 func actionText(r *report.Report) string {
+	text := r.Action.Describe(r.CachePath)
+	var style lipgloss.Style
 	switch r.Action {
-	case "cached":
-		return okStyle.Render("verified bytes placed in Homebrew cache")
-	case "already-cached":
-		return okStyle.Render("left in place — already in Homebrew cache")
-	case "deleted":
-		return dimStyle.Render("quarantined bytes deleted")
-	case "kept":
-		return dimStyle.Render("quarantined bytes kept (not cached)")
-	case "kept-in-cache":
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("208")).Render("left in Homebrew cache despite suspicion — review before installing")
-	case "deleted-from-cache":
-		return errStyle.Render("removed from Homebrew cache (malicious)")
-	case "cache-delete-failed":
-		return errStyle.Render("FAILED to remove from Homebrew cache — delete it manually: " + r.CachePath)
+	case report.ActionCached, report.ActionAlreadyCached:
+		style = okStyle
+	case report.ActionKeptInCache:
+		style = lipgloss.NewStyle().Foreground(lipgloss.Color("208"))
+	case report.ActionDeletedFromCache, report.ActionCacheDeleteFailed:
+		style = errStyle
 	default:
-		return dimStyle.Render(r.Action)
+		style = dimStyle
 	}
+	return style.Render(text)
 }
 
 func worstSeverity(l report.LayerResult) report.Severity {

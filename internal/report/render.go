@@ -7,7 +7,8 @@ import (
 	"strings"
 )
 
-// JSON writes the stable machine-readable report.
+// JSON writes the stable machine-readable report. It is the single owner of
+// SchemaVersion stamping.
 func (r *Report) JSON(w io.Writer) error {
 	r.SchemaVersion = SchemaVersion
 	enc := json.NewEncoder(w)
@@ -23,7 +24,7 @@ func (r *Report) Human(w io.Writer) {
 
 	p("brewcheck report")
 	p("================")
-	kind := r.Kind
+	kind := string(r.Kind)
 	if r.BuildFromSource {
 		kind += ", source build"
 	}
@@ -48,11 +49,9 @@ func (r *Report) Human(w io.Writer) {
 
 	// Layers
 	p("Inspection layers:")
-	ranCount := 0
 	for _, l := range r.Layers {
 		switch l.Status {
 		case StatusRan:
-			ranCount++
 			p("  [ran]     %s%s", l.Name, summarySuffix(l))
 		case StatusSkipped:
 			hint := ""
@@ -70,8 +69,7 @@ func (r *Report) Human(w io.Writer) {
 			}
 		}
 		for _, f := range l.Findings {
-			marker := severityMarker(f.Severity)
-			line := fmt.Sprintf("              %s %s", marker, f.Title)
+			line := fmt.Sprintf("              %s %s", plainMarker(f.Severity), f.Title)
 			if f.Location != "" {
 				line += fmt.Sprintf(" (%s)", f.Location)
 			}
@@ -84,32 +82,23 @@ func (r *Report) Human(w io.Writer) {
 		}
 	}
 	p("")
-	p("  %d of %d layers ran.", ranCount, len(r.Layers))
+	p("  %d of %d layers ran.%s", CountRan(r.Layers), len(r.Layers), degradedSuffix(r))
 	p("")
 
 	// Verdict
 	p("Verdict: %s", r.Verdict)
-	switch r.Verdict {
-	case VerdictClean:
-		p("  No known-malicious indicators found.")
-		p("  (This tool detects known malware and suspicious patterns; it is not a")
-		p("   defense against a novel, targeted supply-chain attack.)")
-	case VerdictHesitant:
-		p("  No known-malicious indicators found, but an aggressive heuristic flagged")
-		p("  something worth a closer look (see ⚑ above).")
-		p("  The bytes were NOT deleted and have been handed to the cache — but you may")
-		p("  want to inspect the flagged item yourself before running `brew install`.")
-	case VerdictSuspicious:
-		p("  Suspicious patterns or an unverifiable hash were found — review above.")
-	case VerdictMalicious:
-		p("  Known-malicious indicators found (see the Action line for what was done).")
-	case VerdictError:
+	if r.Verdict == VerdictError {
 		if r.Error != "" {
 			p("  %s", r.Error)
 		}
+	} else {
+		p("  %s", r.Verdict.Headline())
+		for _, d := range r.Verdict.Detail() {
+			p("  %s", d)
+		}
 	}
 	p("")
-	p("Action: %s", actionLine(r))
+	p("Action: %s", r.Action.Describe(r.CachePath))
 }
 
 func summarySuffix(l LayerResult) string {
@@ -122,50 +111,26 @@ func summarySuffix(l LayerResult) string {
 	return ""
 }
 
+func degradedSuffix(r *Report) string {
+	if r.Degraded <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("  (degraded — %d layer(s) errored; verdict is weaker than a full run)", r.Degraded)
+}
+
 // credibilityBar renders a fixed-width [████░░░░░░] gauge for a 0..max score.
 func credibilityBar(score, max int) string {
+	filled, empty := CredibilityFill(score, max)
 	if max <= 0 {
 		return ""
 	}
-	if score < 0 {
-		score = 0
-	}
-	if score > max {
-		score = max
-	}
-	return "[" + strings.Repeat("█", score) + strings.Repeat("░", max-score) + "]"
+	return "[" + strings.Repeat("█", filled) + strings.Repeat("░", empty) + "]"
 }
 
-func severityMarker(s Severity) string {
-	switch s {
-	case SeverityMalicious:
-		return "‼ MALICIOUS:"
-	case SeveritySuspicious:
-		return "⚠ suspicious:"
-	case SeverityHesitant:
-		return "⚑ HESITANT:"
-	default:
-		return "•"
+// plainMarker is the plain-text finding marker, e.g. "‼ MALICIOUS:".
+func plainMarker(s Severity) string {
+	if w := s.Label(); w != "" {
+		return s.Glyph() + " " + w + ":"
 	}
-}
-
-func actionLine(r *Report) string {
-	switch r.Action {
-	case "cached":
-		return fmt.Sprintf("verified bytes placed in Homebrew cache (%s)", r.CachePath)
-	case "deleted":
-		return "quarantined bytes deleted"
-	case "kept":
-		return "quarantined bytes kept (not cached)"
-	case "already-cached":
-		return fmt.Sprintf("left in place — already in Homebrew cache (%s)", r.CachePath)
-	case "kept-in-cache":
-		return fmt.Sprintf("left in Homebrew cache despite suspicion — review before installing (%s)", r.CachePath)
-	case "deleted-from-cache":
-		return "removed from Homebrew cache (malicious)"
-	case "cache-delete-failed":
-		return fmt.Sprintf("FAILED to remove from Homebrew cache — delete it manually: %s", r.CachePath)
-	default:
-		return r.Action
-	}
+	return s.Glyph()
 }

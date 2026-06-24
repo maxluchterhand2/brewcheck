@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"brewcheck/internal/report"
+	"brewcheck/internal/scan/vt"
 )
 
 // TestMaybeCloudSkips covers the non-network skip branches of the opt-in cloud
@@ -39,7 +40,7 @@ func TestMaybeCloudSkips(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := maybeCloud(context.Background(), tt.in, tt.vtKnown)
+			got := maybeCloud(context.Background(), tt.in, vt.New(""), tt.vtKnown)
 			if got.Status != report.StatusSkipped {
 				t.Fatalf("status = %v, want skipped (no upload should be attempted)", got.Status)
 			}

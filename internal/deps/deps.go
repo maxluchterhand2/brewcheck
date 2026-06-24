@@ -21,6 +21,6 @@ var Hints = map[string]string{
 	"semgrep":    "install with: brew install semgrep",
 	"clamav":     "install with: brew install clamav (then `freshclam` to fetch signatures)",
 	"yara":       "install with: brew install yara",
-	"7z":         "install with: brew install sevenzip",
+	"7zz":        "install with: brew install sevenzip",
 	"capa":       "install with: pipx install flare-capa",
 }

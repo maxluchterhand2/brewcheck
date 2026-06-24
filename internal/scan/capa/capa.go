@@ -9,10 +9,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
-	"time"
 
 	"brewcheck/internal/deps"
 	"brewcheck/internal/report"
+	"brewcheck/internal/timeouts"
 )
 
 // Analyze runs capa against a single binary path. Mach-O support is improving;
@@ -26,7 +26,7 @@ func Analyze(ctx context.Context, path string) report.LayerResult {
 		return res
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, timeouts.Capa)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin, "-j", path)
 	out, err := cmd.Output()

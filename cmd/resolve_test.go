@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"brewcheck/internal/api"
+	"brewcheck/internal/report"
 )
 
 // withBottle returns a formula carrying a bottle for the current host platform.
@@ -24,7 +25,7 @@ func withBottle(t *testing.T) *api.Formula {
 }
 
 func TestFormulaTargetPrefersBottle(t *testing.T) {
-	r, err := formulaTarget("demo", withBottle(t))
+	r, err := formulaTarget("demo", withBottle(t), config{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,24 +44,21 @@ func TestFormulaTargetSourceFallback(t *testing.T) {
 	f.URLs.Stable.Checksum = "srcsum"
 	// No bottle at all -> must fall back to source.
 
-	r, err := formulaTarget("srcdemo", f)
+	r, err := formulaTarget("srcdemo", f, config{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !r.fromSource {
 		t.Fatal("a formula with no bottle should fall back to a source build")
 	}
-	if r.kind != "formula" || r.sourceURL != f.URLs.Stable.URL || r.publishedHash != "srcsum" {
+	if r.kind != report.KindFormula || r.sourceURL != f.URLs.Stable.URL || r.publishedHash != "srcsum" {
 		t.Errorf("unexpected resolved: %+v", r)
 	}
 }
 
 func TestFormulaTargetForceSource(t *testing.T) {
-	old := opts.buildFromSource
-	opts.buildFromSource = true
-	defer func() { opts.buildFromSource = old }()
-
-	r, err := formulaTarget("demo", withBottle(t)) // has a bottle, but we force source
+	// has a bottle, but --build-from-source forces source.
+	r, err := formulaTarget("demo", withBottle(t), config{buildFromSource: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,16 +73,12 @@ func TestFormulaTargetForceSource(t *testing.T) {
 func TestFormulaTargetNoBottleNoSource(t *testing.T) {
 	f := &api.Formula{Name: "nothing"}
 	f.Versions.Stable = "0.1"
-	if _, err := formulaTarget("nothing", f); err == nil {
+	if _, err := formulaTarget("nothing", f, config{}); err == nil {
 		t.Error("expected an error when there is neither a bottle nor a source URL")
 	}
 }
 
 func TestFormulaTargetForceSourceWithoutSourceErrors(t *testing.T) {
-	old := opts.buildFromSource
-	opts.buildFromSource = true
-	defer func() { opts.buildFromSource = old }()
-
 	f := &api.Formula{Name: "bottleonly"}
 	f.Versions.Stable = "1.0"
 	platform, err := api.HostPlatform()
@@ -93,7 +87,7 @@ func TestFormulaTargetForceSourceWithoutSourceErrors(t *testing.T) {
 	}
 	f.Bottle.Stable.Files = map[string]api.BottleFile{platform: {URL: "u", SHA256: "h"}}
 	// bottle present but no source URL, and source is forced.
-	if _, err := formulaTarget("bottleonly", f); err == nil {
+	if _, err := formulaTarget("bottleonly", f, config{buildFromSource: true}); err == nil {
 		t.Error("expected an error: --build-from-source with no source URL")
 	}
 }

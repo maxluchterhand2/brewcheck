@@ -3,8 +3,9 @@
 // (.../blobs/sha256:<digest>), so we only need an anonymous pull token and a
 // streamed GET — no manifest round-trip and no heavyweight registry library.
 //
-// See DECISIONS.md for why we resolve a token rather than hard-coding the
-// well-known anonymous "QQ==" bearer (which also works, and is the fallback).
+// We resolve a short-lived anonymous pull token rather than hard-coding the
+// well-known anonymous "QQ==" bearer (which also works, and is the fallback) so
+// the fetch keeps working if GHCR ever stops honoring the static bearer.
 package oci
 
 import (
@@ -14,7 +15,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
+
+	"brewcheck/internal/timeouts"
 )
 
 // anonFallbackToken is Homebrew's well-known anonymous GHCR bearer for public
@@ -30,7 +32,10 @@ type BlobFetcher struct {
 	client   *http.Client
 }
 
-// NewBlobFetcher constructs a fetcher for a bottle blob URL.
+// NewBlobFetcher constructs a fetcher for a bottle blob URL. The client has no
+// hard Timeout on purpose: the blob GET is a streaming download that can take a
+// while for large bottles, and is bounded instead by the caller's context
+// (SIGINT) and download.maxDownloadSize. Only the quick token fetch is timed.
 func NewBlobFetcher(blobURL, name, version, platform string) *BlobFetcher {
 	return &BlobFetcher{
 		BlobURL:  blobURL,
@@ -55,7 +60,7 @@ func (b *BlobFetcher) Open(ctx context.Context) (io.ReadCloser, int64, error) {
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/vnd.oci.image.layer.v1.tar+gzip, application/octet-stream")
-	req.Header.Set("User-Agent", "brewcheck/0.1")
+	req.Header.Set("User-Agent", "brewcheck/0.2")
 
 	resp, err := b.client.Do(req)
 	if err != nil {
@@ -80,7 +85,7 @@ func (b *BlobFetcher) FileName() string {
 // anonymous bearer on any failure.
 func (b *BlobFetcher) fetchToken(ctx context.Context, repo string) string {
 	url := fmt.Sprintf("https://ghcr.io/token?service=ghcr.io&scope=repository:%s:pull", repo)
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, timeouts.OCIToken)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {

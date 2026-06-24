@@ -5,18 +5,17 @@
 package vt
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
-	"mime/multipart"
 	"net/http"
 	"os"
 	"time"
 
 	"brewcheck/internal/progress"
 	"brewcheck/internal/report"
+	"brewcheck/internal/timeouts"
 )
 
 // apiBase is a var (not const) so tests can point it at a mock server.
@@ -37,7 +36,7 @@ func New(apiKey string) *Client {
 	if apiKey == "" {
 		apiKey = os.Getenv("VT_API_KEY")
 	}
-	return &Client{APIKey: apiKey, HTTP: &http.Client{Timeout: 60 * time.Second}}
+	return &Client{APIKey: apiKey, HTTP: &http.Client{Timeout: timeouts.VirusTotal}}
 }
 
 // Configured reports whether an API key is present.
@@ -153,35 +152,46 @@ func (c *Client) UploadFile(ctx context.Context, path string, onProgress func(do
 		return "", res, false
 	}
 	defer f.Close()
-
-	var buf bytes.Buffer
-	mw := multipart.NewWriter(&buf)
-	fw, err := mw.CreateFormFile("file", "artifact")
-	if err == nil {
-		_, err = io.Copy(fw, f)
-	}
+	fi, err := f.Stat()
 	if err != nil {
 		res.Status = report.StatusError
 		res.Err = err.Error()
 		return "", res, false
 	}
-	mw.Close()
 
-	// Wrap the (fully buffered) body so progress is reported as the transport
-	// drains it onto the wire. ContentLength must be set explicitly because the
-	// wrapped reader isn't a *bytes.Buffer net/http can measure on its own.
-	bodyLen := int64(buf.Len())
-	body := progress.NewReader(&buf, bodyLen, onProgress)
+	// Stream the multipart body through an io.Pipe so the file is never fully
+	// buffered in RAM (matching the download path). The boundary is fixed so the
+	// envelope size — and thus Content-Length — is known up front.
+	const boundary = "brewcheckMultipartBoundary7MA4YWxkTrZu0gW"
+	header := "--" + boundary + "\r\n" +
+		`Content-Disposition: form-data; name="file"; filename="artifact"` + "\r\n" +
+		"Content-Type: application/octet-stream\r\n\r\n"
+	footer := "\r\n--" + boundary + "--\r\n"
+	contentLength := int64(len(header)) + fi.Size() + int64(len(footer))
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiBase+"/files", body)
+	pr, pw := io.Pipe()
+	go func() {
+		var werr error
+		defer func() { pw.CloseWithError(werr) }()
+		if _, werr = io.WriteString(pw, header); werr != nil {
+			return
+		}
+		// progress is reported for the file bytes (the dominant part).
+		if _, werr = io.Copy(pw, progress.NewReader(f, fi.Size(), onProgress)); werr != nil {
+			return
+		}
+		_, werr = io.WriteString(pw, footer)
+	}()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiBase+"/files", pr)
 	if err != nil {
 		res.Status = report.StatusError
 		res.Err = err.Error()
 		return "", res, false
 	}
-	req.ContentLength = bodyLen
+	req.ContentLength = contentLength
 	req.Header.Set("x-apikey", c.APIKey)
-	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("Content-Type", "multipart/form-data; boundary="+boundary)
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
@@ -218,12 +228,16 @@ func (c *Client) PollAnalysis(ctx context.Context, id string) (report.LayerResul
 
 func (c *Client) pollAnalysis(ctx context.Context, res *report.LayerResult, id string) (report.LayerResult, bool) {
 	for attempt := 0; attempt < 20; attempt++ {
-		select {
-		case <-ctx.Done():
-			res.Status = report.StatusError
-			res.Err = ctx.Err().Error()
-			return *res, false
-		case <-time.After(15 * time.Second):
+		// Check immediately on the first attempt (a popular file may already be
+		// analyzed); back off between subsequent polls.
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				res.Status = report.StatusError
+				res.Err = ctx.Err().Error()
+				return *res, false
+			case <-time.After(timeouts.VTPollInterval):
+			}
 		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiBase+"/analyses/"+id, nil)
 		if err != nil {
